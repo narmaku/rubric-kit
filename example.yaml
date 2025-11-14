@@ -1,0 +1,57 @@
+descriptors:
+  - factual_correctness: Evaluates that the information of the final answer is factually correct.
+    grading_type: binary # pass/fail
+  - usefulness: Evaluates how useful is the final response, with regards to the original request.
+    grading_type: score # must specify scores as shown below
+    scores:
+      1: The response is completely useless. It does not fulfill the original request or contains information that is irrelevant and unrelated to the original request.
+      2: The response is useful but incomplete, or partially useful. It lacks steps or key/essential information to completely fulfill the original request.
+      3: The response is useful and complete. It has all the key and essential information to fulfill the original request.
+  - tool_usage: Evaluates whether the model selected the correct tool(s) and used them correctly to fulfill the original request.
+    grading_type: binary # pass/fail
+
+
+
+criteria:
+  sys_info_factual_1:
+    category: Output # this is optional
+    weight: 3 # Range is 0-3 --> 0 is used to disable the criterion
+    dimension: factual_correctness
+    criterion: The response must indicate that number of physical CPUs is 8.
+  sys_info_factual_2:
+    category: Output
+    weight: 3
+    dimension: factual_correctness
+    criterion: The response must indicate that total physical RAM is 64 GB.
+  extra_info_factual_1:
+    category: Output
+    weight: 1
+    dimension: factual_correctness
+    criterion: The response contains information about network devices.
+  useful_1:
+    category: Output
+    weight: from_scores
+    dimension: usefulness
+    criterion: from_scores
+  tool_call_1:
+    category: Tools
+    weight: 3
+    dimension: tool_usage
+    tool_calls:
+      respect_order: true # defaults to true, but it can be set to false if the order of tool calls does not matter
+      required:
+        - get_system_information:
+          min_calls: 1
+          max_calls: 1
+          params:
+        - get_memory_information:
+          min_calls: 1
+          max_calls: 1
+          params:
+      optional:
+        - get_network_interfaces:
+          max_calls: 1
+          params:
+      prohibited: # Must specify tools that should NEVER be called.
+        - get_weather:
+          params:

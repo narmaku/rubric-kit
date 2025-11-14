@@ -1,15 +1,17 @@
 # Rubric Kit
 
-Generate high-quality rubrics based on custom dimensions, descriptors, criteria, and scoring system. Evaluate responses against rubrics and output detailed scores in CSV format with pretty-printed tables.
+Automatic rubric evaluation using LLM-as-a-Judge. Define your rubrics with custom dimensions, descriptors, and criteria, then let an LLM automatically evaluate chat sessions against your rubric. Output detailed scores in CSV format with pretty-printed tables.
 
 ## Features
 
+- **🤖 LLM-as-a-Judge**: Automatic criterion evaluation using OpenAI-compatible LLMs
 - **Schema Validation**: Pydantic-based validation for rubric YAML files
 - **Flexible Grading**: Support for binary (pass/fail) and score-based (1-N) grading
 - **Tool Call Validation**: Define required, optional, and prohibited tool calls
 - **CSV Export**: Export evaluation results to CSV with optional summary rows
 - **Pretty Tables**: Display results in formatted tables in the terminal
-- **Comprehensive Testing**: Full test coverage with pytest
+- **OpenAI Compatible**: Works with any OpenAI-compatible endpoint
+- **Comprehensive Testing**: Full test coverage with pytest (44 tests)
 
 ## Installation
 
@@ -25,29 +27,44 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Command
+### Basic Usage
 
 ```bash
-python main.py <evaluations_file> <rubric_yaml> <output_csv>
+python main.py <chat_session_file> <rubric_yaml> <output_csv>
 ```
 
-### Example
+### Examples
 
 ```bash
-python main.py example_evaluations.json example.yaml results.csv
+# Set your API key
+export OPENAI_API_KEY="your-api-key-here"
+
+# Basic usage
+python main.py example_chat_session.txt example.yaml results.csv
+
+# With custom model
+python main.py chat.txt rubric.yaml output.csv --model gpt-4-turbo
+
+# With custom OpenAI-compatible endpoint
+python main.py chat.txt rubric.yaml output.csv \
+  --model gpt-4 \
+  --base-url https://your-endpoint.com/v1
+
+# With API key as argument
+python main.py chat.txt rubric.yaml output.csv --api-key sk-...
 ```
 
 ### Command-Line Options
 
+**General Options:**
 - `--no-table`: Skip printing the results table to console
-- `--include-summary`: Include a summary row in the CSV output
+- `--include-summary`: Include a summary row in CSV output
 - `--help`: Show help message
 
-### Example with Options
-
-```bash
-python main.py example_evaluations.json example.yaml results.csv --include-summary
-```
+**LLM Configuration:**
+- `--api-key KEY`: OpenAI API key (or set `OPENAI_API_KEY` env var)
+- `--base-url URL`: Base URL for OpenAI-compatible endpoint
+- `--model MODEL`: Model name to use (default: `gpt-4`)
 
 ## Rubric YAML Format
 
@@ -101,44 +118,24 @@ criteria:
           params:
 ```
 
-## Evaluations File Format
+## Chat Session File Format
 
-Provide evaluation results in JSON or YAML format:
+Provide a plain text file with the chat session:
 
-### JSON Format
+```text
+User: What are the system specifications?
+Assistant: The system has 8 physical CPUs and 64 GB of RAM.
 
-```json
-{
-  "sys_info_factual_1": {
-    "type": "binary",
-    "passes": true
-  },
-  "useful_1": {
-    "type": "score",
-    "score": 3
-  },
-  "tool_call_1": {
-    "type": "binary",
-    "passes": true
-  }
-}
+Tool calls:
+- get_system_information() -> {"cpus": 8, "ram_gb": 64}
 ```
 
-### YAML Format
+The LLM will analyze this conversation and automatically evaluate each criterion in your rubric. Include:
+- User queries and assistant responses
+- Tool calls and their results
+- Any other relevant context
 
-```yaml
-sys_info_factual_1:
-  type: binary
-  passes: true
-
-useful_1:
-  type: score
-  score: 3
-
-tool_call_1:
-  type: binary
-  passes: true
-```
+The format is flexible - just write the chat session in a natural, readable way.
 
 ## Output Formats
 
@@ -195,25 +192,27 @@ pytest --cov=rubric_kit --cov-report=html
 
 ```
 rubric-kit/
-├── rubric_kit/           # Main package
+├── rubric_kit/                 # Main package
 │   ├── __init__.py
-│   ├── schema.py         # Pydantic models for validation
-│   ├── validator.py      # YAML validation logic
-│   ├── processor.py      # Score processing
-│   ├── output.py         # CSV and table output
-│   └── main.py           # CLI entry point
-├── tests/                # Test suite
+│   ├── schema.py               # Pydantic models for validation
+│   ├── validator.py            # YAML validation logic
+│   ├── processor.py            # Score processing
+│   ├── output.py               # CSV and table output
+│   ├── llm_judge.py            # LLM-based criterion evaluation
+│   └── main.py                 # CLI entry point
+├── tests/                      # Test suite (45 tests)
 │   ├── test_schema.py
 │   ├── test_validator.py
 │   ├── test_processor.py
 │   ├── test_output.py
+│   ├── test_llm_judge.py
 │   └── test_main.py
-├── main.py               # Command-line entry point
-├── example.yaml          # Example rubric file
-├── example_evaluations.json  # Example evaluations
-├── requirements.txt      # Python dependencies
-├── pyproject.toml        # Project configuration
-└── README.md             # This file
+├── main.py                     # Command-line entry point
+├── example.yaml                # Example rubric file
+├── example_chat_session.txt    # Example chat session
+├── requirements.txt            # Python dependencies
+├── pyproject.toml              # Project configuration
+└── README.md                   # This file
 ```
 
 ## Rubric Components
@@ -249,7 +248,21 @@ For criteria that evaluate tool usage:
 
 ## Examples
 
-See `example.yaml` and `example_evaluations.json` for complete working examples.
+**Included Files:**
+- `example.yaml` - Complete rubric with 3 descriptors and 5 criteria
+- `example_chat_session.txt` - Sample chat session for evaluation
+
+**Try it out:**
+```bash
+# Set your API key
+export OPENAI_API_KEY="your-api-key-here"
+
+# Run the example
+python main.py example_chat_session.txt example.yaml results.csv
+
+# View results in terminal (automatic)
+# Or check results.csv for detailed breakdown
+```
 
 ## License
 
