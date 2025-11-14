@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import os
 import yaml
 from pathlib import Path
 from typing import Dict, Any
@@ -10,6 +11,7 @@ from typing import Dict, Any
 from rubric_kit.validator import load_rubric, RubricValidationError
 from rubric_kit.processor import evaluate_rubric, calculate_total_score, calculate_percentage_score
 from rubric_kit.output import write_csv, print_table
+from rubric_kit.llm_judge import evaluate_rubric_with_llm
 
 
 def load_evaluations(file_path: str) -> Dict[str, Any]:
@@ -57,10 +59,13 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Manual evaluations
   %(prog)s evaluations.json rubric.yaml results.csv
-  %(prog)s eval.yaml rubric.yaml output.csv
+  
+  # LLM-based automatic evaluation
+  %(prog)s chat_session.txt rubric.yaml results.csv --use-llm-judge
 
-Evaluation file format (JSON or YAML):
+Evaluation file format (JSON or YAML - for manual mode):
   {
     "criterion_name": {
       "type": "binary",
@@ -71,12 +76,19 @@ Evaluation file format (JSON or YAML):
       "score": 3
     }
   }
+
+Chat session file format (plain text - for LLM judge mode):
+  User: What are the system specifications?
+  Assistant: The system has 8 CPUs and 64 GB of RAM.
+  
+  Tool calls:
+  - get_system_information() -> {"cpus": 8, "ram_gb": 64}
 """
     )
     
     parser.add_argument(
-        'prompt_file',
-        help='Path to evaluations file (JSON or YAML)'
+        'chat_session_file',
+        help='Path to chat session file (plain text) or evaluations file (JSON/YAML)'
     )
     
     parser.add_argument(
@@ -101,6 +113,29 @@ Evaluation file format (JSON or YAML):
         help='Include summary row in CSV output'
     )
     
+    # LLM judge options
+    parser.add_argument(
+        '--use-llm-judge',
+        action='store_true',
+        help='Use LLM to automatically evaluate criteria based on chat session'
+    )
+    
+    parser.add_argument(
+        '--api-key',
+        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
+    )
+    
+    parser.add_argument(
+        '--base-url',
+        help='Base URL for OpenAI-compatible endpoint (optional)'
+    )
+    
+    parser.add_argument(
+        '--model',
+        default='gpt-4',
+        help='Model name to use for LLM judge (default: gpt-4)'
+    )
+    
     args = parser.parse_args()
     
     try:
@@ -109,13 +144,34 @@ Evaluation file format (JSON or YAML):
         rubric = load_rubric(args.rubric_yaml)
         print(f"✓ Loaded {len(rubric.descriptors)} descriptors and {len(rubric.criteria)} criteria")
         
-        # Load evaluations
-        print(f"\nLoading evaluations from {args.prompt_file}...")
-        evaluations = load_evaluations(args.prompt_file)
-        print(f"✓ Loaded evaluations for {len(evaluations)} criteria")
+        # Get evaluations - either from LLM judge or manual file
+        if args.use_llm_judge:
+            print(f"\n🤖 Using LLM judge to evaluate chat session from {args.chat_session_file}...")
+            print(f"   Model: {args.model}")
+            
+            # Get API key
+            api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                print("Error: API key required for LLM judge. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
+                return 1
+            
+            # Evaluate with LLM
+            evaluations = evaluate_rubric_with_llm(
+                rubric,
+                args.chat_session_file,
+                api_key=api_key,
+                base_url=args.base_url,
+                model=args.model
+            )
+            print(f"✓ LLM evaluated {len(evaluations)} criteria")
+        else:
+            # Load manual evaluations
+            print(f"\nLoading evaluations from {args.chat_session_file}...")
+            evaluations = load_evaluations(args.chat_session_file)
+            print(f"✓ Loaded evaluations for {len(evaluations)} criteria")
         
         # Evaluate rubric
-        print("\nEvaluating rubric...")
+        print("\nProcessing scores...")
         results = evaluate_rubric(rubric, evaluations)
         
         # Calculate scores
