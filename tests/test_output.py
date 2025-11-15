@@ -18,7 +18,8 @@ def sample_results():
             "dimension": "factual_correctness",
             "result": "pass",
             "score": 3,
-            "max_score": 3
+            "max_score": 3,
+            "reason": "The fact is correct"
         },
         {
             "criterion_name": "fact_2",
@@ -27,7 +28,8 @@ def sample_results():
             "dimension": "factual_correctness",
             "result": "fail",
             "score": 0,
-            "max_score": 2
+            "max_score": 2,
+            "reason": "The fact is incorrect"
         },
         {
             "criterion_name": "useful_1",
@@ -37,7 +39,8 @@ def sample_results():
             "result": 3,
             "score": 3,
             "max_score": 3,
-            "score_description": "Very useful"
+            "score_description": "Very useful",
+            "reason": "Very useful. Additional comments from LLM."
         }
     ]
 
@@ -62,6 +65,8 @@ def test_write_csv(sample_results):
         assert rows[0]["score"] == "3"
         assert rows[1]["result"] == "fail"
         assert rows[2]["score_description"] == "Very useful"
+        # Check that reason column is present
+        assert "reason" in rows[0]
     finally:
         os.unlink(temp_path)
 
@@ -98,6 +103,9 @@ def test_format_table(sample_results):
     assert "fail" in table_str
     # Check for score columns
     assert "3" in table_str
+    # Check that new simplified columns are included
+    assert "Consensus" in table_str
+    assert "Agreement" in table_str
 
 
 def test_format_table_with_summary(sample_results):
@@ -135,7 +143,8 @@ def test_csv_headers():
             "dimension": "test_dim",
             "result": "pass",
             "score": 1,
-            "max_score": 1
+            "max_score": 1,
+            "reason": "Test reason"
         }
     ]
     
@@ -153,6 +162,7 @@ def test_csv_headers():
         assert "criterion_name" in headers
         assert "score" in headers
         assert "result" in headers
+        assert "reason" in headers
     finally:
         os.unlink(temp_path)
 

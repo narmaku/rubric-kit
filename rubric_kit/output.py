@@ -97,6 +97,9 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
     """
     Format evaluation results as a pretty table.
     
+    Shows only essential information for readability.
+    Full details are available in the CSV output.
+    
     Args:
         results: List of evaluation results
         include_summary: Whether to include summary row
@@ -107,24 +110,36 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
     if not results:
         return "No results to display."
     
-    # Prepare table data
-    headers = ["Criterion", "Category", "Dimension", "Result", "Score", "Max Score", "Reason"]
+    # Prepare table data with simplified columns
+    headers = ["Criterion", "Category", "Result", "Score", "Consensus", "Agreement"]
     rows = []
     
     for result in results:
         result_str = str(result.get("result", ""))
+        score = result.get("score", 0)
+        max_score = result.get("max_score", 0)
         
-        # Get reason if available
-        reason = result.get("reason", "")
+        # Format consensus indicator
+        consensus_reached = result.get("consensus_reached", True)
+        consensus_indicator = "✓" if consensus_reached else "⚠"
+        
+        # Format agreement as "2/3" or "N/A" if not available
+        consensus_count = result.get("consensus_count")
+        if consensus_count is not None:
+            # Try to determine total judges from judge_votes if available
+            judge_votes = result.get("judge_votes", [])
+            total_judges = len(judge_votes) if judge_votes else consensus_count
+            agreement = f"{consensus_count}/{total_judges}"
+        else:
+            agreement = "N/A"
         
         row = [
             result.get("criterion_name", ""),
             result.get("category", ""),
-            result.get("dimension", ""),
             result_str,
-            result.get("score", 0),
-            result.get("max_score", 0),
-            reason
+            f"{score}/{max_score}",
+            consensus_indicator,
+            agreement
         ]
         rows.append(row)
     
@@ -137,20 +152,18 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
         rows.append([
             "─" * 20,
             "─" * 10,
-            "─" * 15,
             "─" * 10,
-            "─" * 5,
+            "─" * 10,
             "─" * 9,
-            "─" * 30
+            "─" * 10
         ])
         
         rows.append([
             "TOTAL",
             "",
-            "",
             f"{percentage:.1f}%",
-            total_score,
-            max_score,
+            f"{total_score}/{max_score}",
+            "",
             ""
         ])
     
