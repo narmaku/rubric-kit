@@ -4,6 +4,89 @@ from typing import Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
+# ============================================================================
+# Judge Panel Models
+# ============================================================================
+
+class JudgeConfig(BaseModel):
+    """Configuration for a single judge."""
+    name: str = Field(..., description="Unique name for this judge")
+    model: str = Field(..., description="Model name (e.g., gpt-4, claude-3-5-sonnet)")
+    api_key: Optional[str] = Field(None, description="API key (null uses env var)")
+    base_url: Optional[str] = Field(None, description="Custom API endpoint")
+
+
+class ExecutionConfig(BaseModel):
+    """Configuration for judge execution strategy."""
+    mode: Literal["sequential", "parallel", "batched"] = Field(
+        "sequential",
+        description="How to execute judge calls"
+    )
+    batch_size: int = Field(
+        2,
+        ge=1,
+        description="Batch size for batched mode"
+    )
+    timeout: int = Field(
+        30,
+        ge=1,
+        description="Timeout per judge call in seconds"
+    )
+
+
+class ConsensusConfig(BaseModel):
+    """Consensus configuration."""
+    mode: Literal["quorum", "majority", "unanimous"] = Field(
+        "unanimous",
+        description="Consensus mode"
+    )
+    threshold: Optional[int] = Field(
+        None,
+        ge=1,
+        description="Required for quorum mode"
+    )
+    on_no_consensus: Literal["fail", "median", "most_common"] = Field(
+        "fail",
+        description="How to handle no consensus (fail=conservative)"
+    )
+    
+    @model_validator(mode='after')
+    def validate_threshold(self):
+        """Validate threshold is provided for quorum mode."""
+        if self.mode == "quorum" and self.threshold is None:
+            raise ValueError("threshold is required for quorum consensus mode")
+        return self
+
+
+class JudgePanelConfig(BaseModel):
+    """Judge panel configuration."""
+    judges: List[JudgeConfig] = Field(..., min_length=1, description="List of judges")
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    consensus: ConsensusConfig = Field(default_factory=ConsensusConfig)
+    
+    @model_validator(mode='after')
+    def validate_consensus_threshold(self):
+        """Validate consensus threshold against number of judges."""
+        if self.consensus.mode == "quorum":
+            if self.consensus.threshold and self.consensus.threshold > len(self.judges):
+                raise ValueError(
+                    f"Consensus threshold ({self.consensus.threshold}) cannot exceed "
+                    f"number of judges ({len(self.judges)})"
+                )
+        elif self.consensus.mode == "majority":
+            # Auto-calculate threshold for majority
+            self.consensus.threshold = (len(self.judges) // 2) + 1
+        elif self.consensus.mode == "unanimous":
+            # Auto-set threshold to all judges
+            self.consensus.threshold = len(self.judges)
+        return self
+
+
+# ============================================================================
+# Rubric Models
+# ============================================================================
+
+
 class ToolSpec(BaseModel):
     """Specification for a tool call."""
     name: str = Field(..., description="Name of the tool")
@@ -28,18 +111,26 @@ class ToolCalls(BaseModel):
     prohibited: List[ToolSpec] = Field(default_factory=list, description="Prohibited tool calls")
 
 
-class Descriptor(BaseModel):
-    """A descriptor defines an evaluation dimension."""
-    name: str = Field(..., description="Name of the descriptor")
-    description: str = Field(..., description="Description of what this descriptor evaluates")
+class Dimension(BaseModel):
+    """A dimension defines an evaluation aspect."""
+    name: str = Field(..., description="Name of the dimension")
+    description: str = Field(..., description="Description of what this dimension evaluates")
     grading_type: Literal["binary", "score"] = Field(..., description="Type of grading: binary (pass/fail) or score")
     scores: Optional[Dict[int, str]] = Field(None, description="Score definitions (required for score type)")
+    pass_above: Optional[int] = Field(None, description="Minimum score to count as 'pass' (for score type only)")
 
     @model_validator(mode='after')
     def validate_scores(self):
-        """Validate that score type has scores defined."""
+        """Validate that score type has scores defined and pass_above is valid."""
         if self.grading_type == "score" and not self.scores:
-            raise ValueError("Descriptor with grading_type 'score' must have scores defined")
+            raise ValueError("Dimension with grading_type 'score' must have scores defined")
+        
+        if self.pass_above is not None:
+            if self.grading_type != "score":
+                raise ValueError("pass_above can only be used with grading_type 'score'")
+            if self.scores and self.pass_above not in self.scores:
+                raise ValueError(f"pass_above value {self.pass_above} must be a valid score in the scores dictionary")
+        
         return self
 
 
@@ -48,7 +139,7 @@ class Criterion(BaseModel):
     name: str = Field(..., description="Name of the criterion")
     category: Optional[str] = Field(None, description="Category of the criterion (e.g., Output, Tools)")
     weight: Union[int, Literal["from_scores"]] = Field(..., description="Weight of the criterion (0-3) or 'from_scores'")
-    dimension: str = Field(..., description="Dimension/descriptor this criterion evaluates")
+    dimension: str = Field(..., description="Dimension this criterion evaluates")
     criterion: Optional[str] = Field(None, description="The criterion text")
     tool_calls: Optional[ToolCalls] = Field(None, description="Tool call specifications (for Tools category)")
 
@@ -65,27 +156,27 @@ class Criterion(BaseModel):
 
 
 class Rubric(BaseModel):
-    """Complete rubric with descriptors and criteria."""
-    descriptors: List[Descriptor] = Field(..., description="List of descriptors")
+    """Complete rubric with dimensions and criteria."""
+    dimensions: List[Dimension] = Field(..., description="List of dimensions")
     criteria: List[Criterion] = Field(..., description="List of criteria")
 
     @model_validator(mode='after')
     def validate_dimension_references(self):
-        """Validate that all criteria reference valid descriptors."""
-        descriptor_names = {d.name for d in self.descriptors}
+        """Validate that all criteria reference valid dimensions."""
+        dimension_names = {d.name for d in self.dimensions}
         
         for criterion in self.criteria:
-            if criterion.dimension not in descriptor_names:
+            if criterion.dimension not in dimension_names:
                 raise ValueError(
                     f"Criterion '{criterion.name}' references non-existent dimension '{criterion.dimension}'"
                 )
         
         return self
 
-    def get_descriptor(self, name: str) -> Optional[Descriptor]:
-        """Get a descriptor by name."""
-        for descriptor in self.descriptors:
-            if descriptor.name == name:
-                return descriptor
+    def get_dimension(self, name: str) -> Optional[Dimension]:
+        """Get a dimension by name."""
+        for dimension in self.dimensions:
+            if dimension.name == name:
+                return dimension
         return None
 
