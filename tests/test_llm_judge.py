@@ -1,20 +1,23 @@
-"""Tests for LLM judge functionality."""
+"""Tests for LLM judge functionality with judge panel architecture."""
 
 import pytest
 import tempfile
 import os
-from unittest.mock import Mock, patch
-from rubric_kit.schema import Rubric, Descriptor, Criterion
+from unittest.mock import Mock, patch, MagicMock
+from rubric_kit.schema import (
+    Rubric, Dimension, Criterion,
+    JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
+)
 
 
 @pytest.fixture
 def sample_chat_session_file():
     """Create a sample chat session file."""
     content = """User: What are the system specifications?
-Assistant: The system has 8 physical CPUs and 64 GB of RAM.
+Assistant: The system has 8 physical CPUs and 64 GB of RAM running Fedora Linux 42.
 
 Tool calls:
-- get_system_information() -> {"cpus": 8, "ram_gb": 64}
+- get_system_information() -> {"os": "Fedora Linux 42", "cpus": 8, "ram_gb": 64}
 """
     
     with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt') as f:
@@ -26,39 +29,15 @@ Tool calls:
 
 
 @pytest.fixture
-def simple_binary_criterion():
-    """Create a simple binary criterion."""
-    return Criterion(
-        name="test_fact",
-        category="Output",
-        weight=3,
-        dimension="factual_correctness",
-        criterion="The response must indicate that number of physical CPUs is 8."
-    )
-
-
-@pytest.fixture
-def simple_score_criterion():
-    """Create a simple score criterion."""
-    return Criterion(
-        name="test_useful",
-        category="Output",
-        weight="from_scores",
-        dimension="usefulness",
-        criterion="from_scores"
-    )
-
-
-@pytest.fixture
 def simple_rubric():
     """Create a simple rubric for testing."""
-    descriptors = [
-        Descriptor(
+    dimensions = [
+        Dimension(
             name="factual_correctness",
             description="Evaluates factual correctness",
             grading_type="binary"
         ),
-        Descriptor(
+        Dimension(
             name="usefulness",
             description="Evaluates usefulness",
             grading_type="score",
@@ -83,164 +62,240 @@ def simple_rubric():
         )
     ]
     
-    return Rubric(descriptors=descriptors, criteria=criteria)
+    return Rubric(dimensions=dimensions, criteria=criteria)
 
 
-def test_read_chat_session(sample_chat_session_file):
-    """Test reading chat session file."""
-    from rubric_kit.llm_judge import read_chat_session
-    
-    content = read_chat_session(sample_chat_session_file)
-    assert "What are the system specifications?" in content
-    assert "8 physical CPUs" in content
-
-
-def test_create_binary_criterion_prompt(simple_binary_criterion):
-    """Test creating prompt for binary criterion evaluation."""
-    from rubric_kit.llm_judge import create_criterion_prompt
-    
-    chat_content = "Assistant: The system has 8 CPUs."
-    prompt = create_criterion_prompt(simple_binary_criterion, chat_content, "binary")
-    
-    assert "factual_correctness" in prompt
-    assert "PASS" in prompt
-    assert "FAIL" in prompt
-    assert "8" in chat_content
-
-
-def test_create_score_criterion_prompt(simple_score_criterion):
-    """Test creating prompt for score criterion evaluation."""
-    from rubric_kit.llm_judge import create_criterion_prompt
-    
-    descriptor = Descriptor(
-        name="usefulness",
-        description="Test",
-        grading_type="score",
-        scores={1: "Not useful", 2: "Somewhat useful", 3: "Very useful"}
+@pytest.fixture
+def single_judge_panel():
+    """Create a single-judge panel configuration."""
+    return JudgePanelConfig(
+        judges=[JudgeConfig(name="judge_1", model="gpt-4", api_key="test-key")],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
     )
-    
-    chat_content = "Assistant: Here's the information."
-    prompt = create_criterion_prompt(simple_score_criterion, chat_content, "score", descriptor)
-    
-    assert "usefulness" in prompt
-    assert "1" in prompt
-    assert "3" in prompt
 
 
-@patch('rubric_kit.llm_judge.OpenAI')
-def test_evaluate_criterion_with_llm_binary(mock_openai, simple_binary_criterion):
-    """Test LLM evaluation of binary criterion."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_llm
-    
-    # Mock OpenAI response
-    mock_client = Mock()
-    mock_response = Mock()
-    mock_response.choices = [Mock(message=Mock(content="PASS"))]
-    mock_client.chat.completions.create.return_value = mock_response
-    mock_openai.return_value = mock_client
-    
-    chat_content = "Assistant: The system has 8 CPUs."
-    result = evaluate_criterion_with_llm(
-        simple_binary_criterion,
-        chat_content,
-        "binary",
-        api_key="test_key"
+@pytest.fixture
+def multi_judge_panel():
+    """Create a multi-judge panel configuration."""
+    return JudgePanelConfig(
+        judges=[
+            JudgeConfig(name="judge_1", model="gpt-4", api_key="test-key-1"),
+            JudgeConfig(name="judge_2", model="gpt-4-turbo", api_key="test-key-2"),
+            JudgeConfig(name="judge_3", model="gpt-4", api_key="test-key-3")
+        ],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="quorum", threshold=2)
     )
-    
-    assert result["type"] == "binary"
-    assert result["passes"] is True
 
 
-@patch('rubric_kit.llm_judge.OpenAI')
-def test_evaluate_criterion_with_llm_score(mock_openai, simple_score_criterion):
-    """Test LLM evaluation of score criterion."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_llm
+# ============================================================================
+# Core Evaluation Tests
+# ============================================================================
+
+def test_evaluate_criterion_with_single_judge(simple_rubric, sample_chat_session_file, single_judge_panel):
+    """Test evaluating a criterion with single judge."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
     
-    # Mock OpenAI response
-    mock_client = Mock()
-    mock_response = Mock()
-    mock_response.choices = [Mock(message=Mock(content="3"))]
-    mock_client.chat.completions.create.return_value = mock_response
-    mock_openai.return_value = mock_client
+    criterion = simple_rubric.criteria[0]  # Binary criterion
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
     
-    descriptor = Descriptor(
-        name="usefulness",
-        description="Test",
-        grading_type="score",
-        scores={1: "Bad", 2: "Good", 3: "Great"}
-    )
-    
-    chat_content = "Assistant: Complete response."
-    result = evaluate_criterion_with_llm(
-        simple_score_criterion,
-        chat_content,
-        "score",
-        api_key="test_key",
-        descriptor=descriptor
-    )
-    
-    assert result["type"] == "score"
-    assert result["score"] == 3
+    # Mock the OpenAI client
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        # Setup mock response
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: The response correctly states 8 CPUs."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        result = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=single_judge_panel
+        )
+        
+        assert result["consensus_reached"] is True
+        assert result["passes"] is True
+        assert len(result["judge_votes"]) == 1
 
 
-@patch('rubric_kit.llm_judge.OpenAI')
-def test_evaluate_rubric_with_llm(mock_openai, simple_rubric, sample_chat_session_file):
-    """Test evaluating entire rubric with LLM."""
-    from rubric_kit.llm_judge import evaluate_rubric_with_llm
+def test_evaluate_criterion_with_multi_judge_consensus(simple_rubric, sample_chat_session_file, multi_judge_panel):
+    """Test evaluating a criterion with multi-judge panel reaching consensus."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
     
-    # Mock OpenAI responses
-    mock_client = Mock()
-    mock_responses = [
-        Mock(choices=[Mock(message=Mock(content="PASS"))]),
-        Mock(choices=[Mock(message=Mock(content="3"))])
-    ]
-    mock_client.chat.completions.create.side_effect = mock_responses
-    mock_openai.return_value = mock_client
+    criterion = simple_rubric.criteria[0]  # Binary criterion
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
     
-    evaluations = evaluate_rubric_with_llm(
-        simple_rubric,
-        sample_chat_session_file,
-        api_key="test_key"
-    )
-    
-    assert len(evaluations) == 2
-    assert "test_fact" in evaluations
-    assert "test_useful" in evaluations
-    assert evaluations["test_fact"]["type"] == "binary"
-    assert evaluations["test_useful"]["type"] == "score"
+    # Mock the OpenAI client to return consistent PASS votes
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        result = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=multi_judge_panel
+        )
+        
+        # With threshold=2 and all 3 judges voting PASS, consensus is reached
+        assert result["consensus_reached"] is True
+        assert result["passes"] is True
+        assert len(result["judge_votes"]) == 3
+        assert result["consensus_count"] == 3
 
 
-def test_parse_llm_response_binary():
-    """Test parsing binary LLM responses."""
-    from rubric_kit.llm_judge import parse_binary_response
+def test_evaluate_criterion_with_multi_judge_no_consensus(simple_rubric, sample_chat_session_file, multi_judge_panel):
+    """Test evaluating a criterion with multi-judge panel not reaching consensus."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
     
-    assert parse_binary_response("PASS") is True
-    assert parse_binary_response("pass") is True
-    assert parse_binary_response("The answer is PASS") is True
-    assert parse_binary_response("FAIL") is False
-    assert parse_binary_response("fail") is False
+    criterion = simple_rubric.criteria[0]  # Binary criterion
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Mock the OpenAI client to return split votes
+    call_count = [0]
+    
+    def mock_create(*args, **kwargs):
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        # First call: PASS, second: FAIL, third: PASS
+        if call_count[0] == 1:
+            response.choices[0].message.content = "RESULT: FAIL\nREASON: Not specific enough."
+        else:
+            response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        call_count[0] += 1
+        return response
+    
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = mock_create
+        mock_openai.return_value = mock_client
+        
+        result = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=multi_judge_panel
+        )
+        
+        # With threshold=2 and votes 2 PASS, 1 FAIL, consensus IS reached (2 >= threshold)
+        assert result["consensus_reached"] is True
+        assert result["passes"] is True
+        assert len(result["judge_votes"]) == 3
+        assert result["consensus_count"] == 2
 
 
-def test_parse_llm_response_score():
-    """Test parsing score LLM responses."""
-    from rubric_kit.llm_judge import parse_score_response
+def test_evaluate_criterion_score_based(simple_rubric, sample_chat_session_file, multi_judge_panel):
+    """Test evaluating a score-based criterion with multi-judge panel."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
     
-    assert parse_score_response("3") == 3
-    assert parse_score_response("The score is 2") == 2
-    assert parse_score_response("1") == 1
-    assert parse_score_response("Score: 3/3") == 3
+    criterion = simple_rubric.criteria[1]  # Score criterion
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Mock the OpenAI client to return consistent score
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "SCORE: 2\nREASON: Somewhat useful response."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        result = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=multi_judge_panel
+        )
+        
+        # With threshold=2 and all 3 judges giving score 2, consensus is reached
+        assert result["consensus_reached"] is True
+        assert result["score"] == 2
+        assert len(result["judge_votes"]) == 3
 
 
-def test_invalid_api_configuration():
-    """Test handling of invalid API configuration."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_llm
+# ============================================================================
+# Full Rubric Evaluation Tests
+# ============================================================================
+
+def test_evaluate_rubric_with_panel(simple_rubric, sample_chat_session_file, single_judge_panel):
+    """Test evaluating full rubric with judge panel."""
+    from rubric_kit.llm_judge import evaluate_rubric_with_panel
     
-    criterion = Criterion(
-        name="test",
-        weight=1,
-        dimension="test",
-        criterion="Test"
-    )
+    # Mock the OpenAI client
+    call_count = [0]
     
-    with pytest.raises(ValueError, match="API key"):
-        evaluate_criterion_with_llm(criterion, "content", "binary", api_key=None)
+    def mock_create(*args, **kwargs):
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        if call_count[0] == 0:
+            # First criterion (binary)
+            response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        else:
+            # Second criterion (score)
+            response.choices[0].message.content = "SCORE: 3\nREASON: Very useful."
+        call_count[0] += 1
+        return response
+    
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = mock_create
+        mock_openai.return_value = mock_client
+        
+        evaluations = evaluate_rubric_with_panel(
+            rubric=simple_rubric,
+            chat_session_file=sample_chat_session_file,
+            panel_config=single_judge_panel
+        )
+        
+        assert len(evaluations) == 2
+        assert "test_fact" in evaluations
+        assert "test_useful" in evaluations
+        
+        # Check binary criterion result
+        assert evaluations["test_fact"]["type"] == "binary"
+        assert evaluations["test_fact"]["consensus_reached"] is True
+        assert evaluations["test_fact"]["passes"] is True
+        
+        # Check score criterion result
+        assert evaluations["test_useful"]["type"] == "score"
+        assert evaluations["test_useful"]["consensus_reached"] is True
+        assert evaluations["test_useful"]["score"] == 3
+
+
+# ============================================================================
+# Error Handling Tests
+# ============================================================================
+
+def test_evaluate_criterion_with_api_error(simple_rubric, sample_chat_session_file, single_judge_panel):
+    """Test handling API errors during evaluation."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Mock API error
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = Exception("API Error")
+        mock_openai.return_value = mock_client
+        
+        with pytest.raises(Exception, match="Judge evaluation failed"):
+            evaluate_criterion_with_panel(
+                criterion=criterion,
+                chat_content=chat_content,
+                dimension=dimension,
+                panel_config=single_judge_panel
+            )

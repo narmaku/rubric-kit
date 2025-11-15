@@ -1,4 +1,4 @@
-"""LLM-based judge for automatic criterion evaluation."""
+"""LLM-based judge panel for automatic criterion evaluation."""
 
 import re
 import os
@@ -6,7 +6,16 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 from openai import OpenAI
 
-from rubric_kit.schema import Rubric, Criterion, Descriptor
+from rubric_kit.schema import Rubric, Criterion, Dimension, JudgePanelConfig, JudgeConfig
+from rubric_kit.prompts import (
+    EVALUATOR_CONFIG,
+    TOOL_CALL_EVALUATOR_CONFIG,
+    build_binary_criterion_prompt,
+    build_score_criterion_prompt,
+    build_tool_call_evaluation_prompt,
+)
+from rubric_kit.execution import execute_judges
+from rubric_kit.consensus import apply_binary_consensus, apply_score_consensus
 
 
 def read_chat_session(file_path: str) -> str:
@@ -23,70 +32,7 @@ def read_chat_session(file_path: str) -> str:
         return f.read()
 
 
-def create_criterion_prompt(
-    criterion: Criterion,
-    chat_content: str,
-    grading_type: str,
-    descriptor: Optional[Descriptor] = None
-) -> str:
-    """
-    Create a prompt for LLM to evaluate a criterion.
-    
-    Args:
-        criterion: The criterion to evaluate
-        chat_content: The chat session content
-        grading_type: Type of grading ("binary" or "score")
-        descriptor: Optional descriptor for score-based criteria
-        
-    Returns:
-        Formatted prompt for the LLM
-    """
-    if grading_type == "binary":
-        prompt = f"""You are an expert evaluator. Your task is to evaluate whether a chat session meets a specific criterion.
-
-**Criterion Details:**
-- Dimension: {criterion.dimension}
-- Category: {criterion.category}
-- Criterion: {criterion.criterion}
-
-**Chat Session:**
-{chat_content}
-
-**Instructions:**
-Carefully analyze the chat session above and determine if it meets the criterion.
-Respond with ONLY one word: either "PASS" or "FAIL".
-
-**Response:**"""
-        
-    else:  # score
-        if not descriptor or not descriptor.scores:
-            raise ValueError(f"Descriptor with scores required for score-based criterion")
-        
-        score_descriptions = "\n".join([f"{score}: {desc}" for score, desc in sorted(descriptor.scores.items())])
-        
-        prompt = f"""You are an expert evaluator. Your task is to score a chat session based on a specific criterion.
-
-**Criterion Details:**
-- Dimension: {criterion.dimension}
-- Category: {criterion.category}
-- Description: {descriptor.description}
-
-**Scoring Scale:**
-{score_descriptions}
-
-**Chat Session:**
-{chat_content}
-
-**Instructions:**
-Carefully analyze the chat session above and assign a score from {min(descriptor.scores.keys())} to {max(descriptor.scores.keys())} based on the scoring scale.
-Respond with ONLY the numeric score (e.g., "1", "2", or "3").
-
-**Response:**"""
-    
-    return prompt
-
-
-def parse_binary_response(response: str) -> bool:
+def parse_binary_response(response: str) -> Dict[str, Any]:
     """
     Parse LLM response for binary criterion.
     
@@ -94,19 +40,34 @@ def parse_binary_response(response: str) -> bool:
         response: LLM response text
         
     Returns:
-        True if PASS, False if FAIL
+        Dictionary with 'passes' (bool) and 'reason' (str)
     """
     response_upper = response.upper().strip()
-    if "PASS" in response_upper:
-        return True
+    
+    # Extract result
+    passes = False
+    if "RESULT:" in response_upper:
+        result_line = response_upper.split("RESULT:")[1].split("\n")[0].strip()
+        passes = "PASS" in result_line
+    elif "PASS" in response_upper:
+        passes = True
     elif "FAIL" in response_upper:
-        return False
-    else:
-        # Default to FAIL if unclear
-        return False
+        passes = False
+    
+    # Extract reason
+    reason = ""
+    if "REASON:" in response.upper():
+        reason_parts = response.split("REASON:")
+        if len(reason_parts) > 1:
+            reason = reason_parts[1].strip()
+    
+    return {
+        "passes": passes,
+        "reason": reason
+    }
 
 
-def parse_score_response(response: str) -> int:
+def parse_score_response(response: str) -> Dict[str, Any]:
     """
     Parse LLM response for score criterion.
     
@@ -114,98 +75,241 @@ def parse_score_response(response: str) -> int:
         response: LLM response text
         
     Returns:
-        Numeric score value
+        Dictionary with 'score' (int) and 'reason' (str)
     """
-    # Extract first number from response
-    match = re.search(r'\d+', response.strip())
-    if match:
-        return int(match.group())
+    score = None
+    reason = ""
+    
+    # Extract score
+    if "SCORE:" in response.upper():
+        score_line = response.upper().split("SCORE:")[1].split("\n")[0].strip()
+        match = re.search(r'\d+', score_line)
+        if match:
+            score = int(match.group())
     else:
+        # Fallback: extract first number from response
+        match = re.search(r'\d+', response.strip())
+        if match:
+            score = int(match.group())
+    
+    if score is None:
         raise ValueError(f"Could not parse score from response: {response}")
+    
+    # Extract reason
+    if "REASON:" in response.upper():
+        reason_parts = response.split("REASON:")
+        if len(reason_parts) > 1:
+            reason = reason_parts[1].strip()
+    
+    return {
+        "score": score,
+        "reason": reason
+    }
 
 
-def evaluate_criterion_with_llm(
+def _single_judge_evaluate(
+    judge_config: JudgeConfig,
     criterion: Criterion,
     chat_content: str,
-    grading_type: str,
-    api_key: Optional[str] = None,
-    base_url: Optional[str] = None,
-    model: str = "gpt-4",
-    descriptor: Optional[Descriptor] = None
+    dimension: Optional[Dimension]
 ) -> Dict[str, Any]:
     """
-    Evaluate a single criterion using LLM.
+    Evaluate a criterion using a single judge.
+    
+    This is the function passed to execute_judges for each judge.
     
     Args:
+        judge_config: Configuration for this judge
         criterion: The criterion to evaluate
         chat_content: The chat session content
-        grading_type: Type of grading ("binary" or "score")
-        api_key: OpenAI API key (or None to use environment variable)
-        base_url: Optional custom base URL for OpenAI-compatible endpoint
-        model: Model name to use
-        descriptor: Optional descriptor for score-based criteria
+        dimension: Optional dimension for score-based criteria
         
     Returns:
         Evaluation result dictionary
     """
+    # Get API key (from judge config or environment)
+    api_key = judge_config.api_key
     if not api_key:
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
-            raise ValueError("API key is required. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
+            raise ValueError("API key is required. Set OPENAI_API_KEY environment variable or provide in judge config.")
     
     # Initialize OpenAI client
     client_kwargs = {"api_key": api_key}
-    if base_url:
-        client_kwargs["base_url"] = base_url
+    if judge_config.base_url:
+        client_kwargs["base_url"] = judge_config.base_url
     
     client = OpenAI(**client_kwargs)
     
-    # Create prompt
-    prompt = create_criterion_prompt(criterion, chat_content, grading_type, descriptor)
+    # Determine evaluation type and build prompt
+    grading_type = dimension.grading_type if dimension else "binary"
+    
+    if criterion.tool_calls:
+        prompt = build_tool_call_evaluation_prompt(criterion, chat_content)
+        evaluation_type = "tool_call"
+        config = TOOL_CALL_EVALUATOR_CONFIG
+    elif grading_type == "binary":
+        prompt = build_binary_criterion_prompt(criterion, chat_content)
+        evaluation_type = "binary"
+        config = EVALUATOR_CONFIG
+    else:  # score
+        if not dimension:
+            raise ValueError(f"Dimension required for score-based criterion")
+        prompt = build_score_criterion_prompt(criterion, chat_content, dimension)
+        evaluation_type = "score"
+        config = EVALUATOR_CONFIG
     
     # Call LLM
     response = client.chat.completions.create(
-        model=model,
+        model=judge_config.model,
         messages=[
+            {"role": "system", "content": config.system_prompt},
             {"role": "user", "content": prompt}
         ],
-        temperature=0.0,
-        max_tokens=10
+        temperature=config.temperature,
+        max_tokens=config.max_tokens
     )
     
     llm_response = response.choices[0].message.content.strip()
     
-    # Parse response
-    if grading_type == "binary":
-        passes = parse_binary_response(llm_response)
+    # Parse response based on evaluation type
+    if evaluation_type in ("binary", "tool_call"):
+        parsed = parse_binary_response(llm_response)
         return {
-            "type": "binary",
-            "passes": passes
+            "passes": parsed["passes"],
+            "reason": parsed["reason"]
         }
     else:  # score
-        score = parse_score_response(llm_response)
+        parsed = parse_score_response(llm_response)
         return {
-            "type": "score",
-            "score": score
+            "score": parsed["score"],
+            "reason": parsed["reason"]
         }
 
 
-def evaluate_rubric_with_llm(
+def evaluate_criterion_with_panel(
+    criterion: Criterion,
+    chat_content: str,
+    dimension: Optional[Dimension],
+    panel_config: JudgePanelConfig
+) -> Dict[str, Any]:
+    """
+    Evaluate a single criterion using a judge panel.
+    
+    Args:
+        criterion: The criterion to evaluate
+        chat_content: The chat session content
+        dimension: Dimension for score-based criteria (optional)
+        panel_config: Judge panel configuration
+        
+    Returns:
+        Evaluation result dictionary with consensus information:
+        For binary: {"type": "binary", "passes": bool, "consensus_reached": bool, 
+                    "consensus_count": int, "judge_votes": List[Dict], "reason": str}
+        For score: {"type": "score", "score": int, "consensus_reached": bool,
+                   "consensus_count": int, "judge_votes": List[Dict], "reason": str}
+    """
+    # Execute all judges
+    judge_results = execute_judges(
+        judges=panel_config.judges,
+        judge_function=_single_judge_evaluate,
+        execution_mode=panel_config.execution.mode,
+        criterion=criterion,
+        chat_content=chat_content,
+        dimension=dimension,
+        batch_size=panel_config.execution.batch_size,
+        timeout=panel_config.execution.timeout
+    )
+    
+    # Check for errors in judge results
+    errors = [r for r in judge_results if "error" in r]
+    if errors:
+        # For now, raise an exception if any judge fails
+        # Could be enhanced to handle partial failures
+        error_msgs = [f"{r['judge']}: {r['error']}" for r in errors]
+        raise Exception(f"Judge evaluation failed: {'; '.join(error_msgs)}")
+    
+    # Determine evaluation type
+    grading_type = dimension.grading_type if dimension else "binary"
+    
+    # Apply consensus logic
+    if grading_type == "binary" or criterion.tool_calls:
+        # Binary consensus
+        consensus_result = apply_binary_consensus(
+            votes=judge_results,
+            threshold=panel_config.consensus.threshold,
+            on_no_consensus=panel_config.consensus.on_no_consensus
+        )
+        
+        # Build reason from judge votes
+        reason = _build_consensus_reason(consensus_result)
+        
+        return {
+            "type": "binary",
+            "passes": consensus_result["passes"],
+            "consensus_reached": consensus_result["consensus_reached"],
+            "consensus_count": consensus_result["consensus_count"],
+            "judge_votes": consensus_result["judge_votes"],
+            "reason": reason
+        }
+    else:  # score
+        # Score consensus
+        consensus_result = apply_score_consensus(
+            votes=judge_results,
+            threshold=panel_config.consensus.threshold,
+            on_no_consensus=panel_config.consensus.on_no_consensus
+        )
+        
+        # Build reason from judge votes
+        reason = _build_consensus_reason(consensus_result)
+        
+        return {
+            "type": "score",
+            "score": consensus_result["score"],
+            "consensus_reached": consensus_result["consensus_reached"],
+            "consensus_count": consensus_result["consensus_count"],
+            "judge_votes": consensus_result["judge_votes"],
+            "reason": reason
+        }
+
+
+def _build_consensus_reason(consensus_result: Dict[str, Any]) -> str:
+    """
+    Build a human-readable reason from consensus result.
+    
+    Args:
+        consensus_result: Result from apply_binary_consensus or apply_score_consensus
+        
+    Returns:
+        Human-readable reason string
+    """
+    judge_votes = consensus_result["judge_votes"]
+    consensus_reached = consensus_result["consensus_reached"]
+    consensus_count = consensus_result["consensus_count"]
+    
+    if len(judge_votes) == 1:
+        # Single judge: use their reason directly
+        return judge_votes[0].get("reason", "")
+    
+    # Multiple judges: summarize consensus
+    if consensus_reached:
+        return f"Consensus reached ({consensus_count}/{len(judge_votes)} judges agreed)"
+    else:
+        return f"No consensus reached (max agreement: {consensus_count}/{len(judge_votes)} judges)"
+
+
+def evaluate_rubric_with_panel(
     rubric: Rubric,
     chat_session_file: str,
-    api_key: Optional[str] = None,
-    base_url: Optional[str] = None,
-    model: str = "gpt-4"
+    panel_config: JudgePanelConfig
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Evaluate all criteria in a rubric using LLM.
+    Evaluate all criteria in a rubric using a judge panel.
     
     Args:
         rubric: The rubric to evaluate
         chat_session_file: Path to the chat session file
-        api_key: OpenAI API key (or None to use environment variable)
-        base_url: Optional custom base URL for OpenAI-compatible endpoint
-        model: Model name to use
+        panel_config: Judge panel configuration
         
     Returns:
         Dictionary mapping criterion names to evaluation results
@@ -216,25 +320,19 @@ def evaluate_rubric_with_llm(
     evaluations = {}
     
     for criterion in rubric.criteria:
-        # Get descriptor for this criterion
-        descriptor = rubric.get_descriptor(criterion.dimension)
-        if not descriptor:
-            raise ValueError(f"Descriptor '{criterion.dimension}' not found for criterion '{criterion.name}'")
+        # Get dimension for this criterion
+        dimension = rubric.get_dimension(criterion.dimension)
+        if not dimension:
+            raise ValueError(f"Dimension '{criterion.dimension}' not found for criterion '{criterion.name}'")
         
-        grading_type = descriptor.grading_type
-        
-        # Evaluate criterion
-        evaluation = evaluate_criterion_with_llm(
-            criterion,
-            chat_content,
-            grading_type,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            descriptor=descriptor if grading_type == "score" else None
+        # Evaluate criterion with panel
+        evaluation = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel_config
         )
         
         evaluations[criterion.name] = evaluation
     
     return evaluations
-
