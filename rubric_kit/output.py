@@ -1,29 +1,27 @@
-"""Output handlers for CSV and table display."""
+"""Output handlers for CSV, JSON, YAML and table display."""
 
 import csv
-from typing import List, Dict, Any
+import json
+import yaml
+import os
+from typing import List, Dict, Any, Tuple
 from tabulate import tabulate
 
 
-def write_csv(
-    results: List[Dict[str, Any]], 
-    output_path: str, 
-    include_summary: bool = False
-) -> None:
+def _prepare_data_for_csv(
+    results: List[Dict[str, Any]]
+) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
-    Write evaluation results to a CSV file.
+    Prepare results data for CSV format by expanding judge_votes.
     
     Args:
         results: List of evaluation results
-        output_path: Path to output CSV file
-        include_summary: Whether to include summary row
+        
+    Returns:
+        Tuple of (expanded_results, fieldnames)
     """
     if not results:
-        # Write empty CSV with headers
-        with open(output_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(["criterion_name", "category", "dimension", "result", "score", "max_score"])
-        return
+        return [], ["criterion_name", "category", "dimension", "result", "score", "max_score"]
     
     # Expand judge_votes into separate columns
     expanded_results = []
@@ -70,6 +68,61 @@ def write_csv(
     ordered_fieldnames.extend(sorted(judge_fields))
     fieldnames = ordered_fieldnames
     
+    return expanded_results, fieldnames
+
+
+def _calculate_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Calculate summary statistics from results.
+    
+    Args:
+        results: List of evaluation results
+        
+    Returns:
+        Dictionary with summary statistics
+    """
+    if not results:
+        return {
+            "criterion_name": "TOTAL",
+            "score": 0,
+            "max_score": 0,
+            "result": "0.0%"
+        }
+    
+    total_score = sum(r["score"] for r in results)
+    max_score = sum(r["max_score"] for r in results)
+    percentage = (total_score / max_score * 100) if max_score > 0 else 0
+    
+    return {
+        "criterion_name": "TOTAL",
+        "score": total_score,
+        "max_score": max_score,
+        "result": f"{percentage:.1f}%"
+    }
+
+
+def write_csv(
+    results: List[Dict[str, Any]], 
+    output_path: str, 
+    include_summary: bool = False
+) -> None:
+    """
+    Write evaluation results to a CSV file.
+    
+    Args:
+        results: List of evaluation results
+        output_path: Path to output CSV file
+        include_summary: Whether to include summary row
+    """
+    expanded_results, fieldnames = _prepare_data_for_csv(results)
+    
+    if not expanded_results:
+        # Write empty CSV with headers
+        with open(output_path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(fieldnames)
+        return
+    
     with open(output_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -80,17 +133,115 @@ def write_csv(
         
         # Add summary row if requested
         if include_summary:
-            total_score = sum(r["score"] for r in results)
-            max_score = sum(r["max_score"] for r in results)
-            percentage = (total_score / max_score * 100) if max_score > 0 else 0
-            
+            summary = _calculate_summary(results)
             summary_row = {key: "" for key in fieldnames}
-            summary_row["criterion_name"] = "TOTAL"
-            summary_row["score"] = total_score
-            summary_row["max_score"] = max_score
-            summary_row["result"] = f"{percentage:.1f}%"
-            
+            summary_row.update(summary)
             writer.writerow(summary_row)
+
+
+def write_json(
+    results: List[Dict[str, Any]], 
+    output_path: str, 
+    include_summary: bool = False
+) -> None:
+    """
+    Write evaluation results to a JSON file.
+    
+    Args:
+        results: List of evaluation results
+        output_path: Path to output JSON file
+        include_summary: Whether to include summary in output
+    """
+    output_data = {
+        "results": results
+    }
+    
+    if include_summary:
+        output_data["summary"] = _calculate_summary(results)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(output_data, f, indent=2, ensure_ascii=False)
+
+
+def write_yaml(
+    results: List[Dict[str, Any]], 
+    output_path: str, 
+    include_summary: bool = False
+) -> None:
+    """
+    Write evaluation results to a YAML file.
+    
+    Args:
+        results: List of evaluation results
+        output_path: Path to output YAML file
+        include_summary: Whether to include summary in output
+    """
+    output_data = {
+        "results": results
+    }
+    
+    if include_summary:
+        output_data["summary"] = _calculate_summary(results)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        yaml.dump(output_data, f, 
+                 sort_keys=False, 
+                 default_flow_style=False,
+                 allow_unicode=True)
+
+
+def detect_format_from_extension(output_path: str) -> str:
+    """
+    Detect output format from file extension.
+    
+    Args:
+        output_path: Path to output file
+        
+    Returns:
+        Format string: 'csv', 'json', or 'yaml'
+    """
+    ext = os.path.splitext(output_path)[1].lower()
+    
+    if ext == '.json':
+        return 'json'
+    elif ext in ('.yaml', '.yml'):
+        return 'yaml'
+    elif ext == '.csv':
+        return 'csv'
+    else:
+        # Default to CSV if extension is not recognized
+        return 'csv'
+
+
+def write_results(
+    results: List[Dict[str, Any]], 
+    output_path: str, 
+    format: str | None = None,
+    include_summary: bool = False
+) -> None:
+    """
+    Write evaluation results to a file in the specified format.
+    
+    Args:
+        results: List of evaluation results
+        output_path: Path to output file
+        format: Output format ('csv', 'json', 'yaml'). If None, detected from file extension.
+        include_summary: Whether to include summary in output
+    """
+    # Auto-detect format from extension if not specified
+    if format is None:
+        format = detect_format_from_extension(output_path)
+    
+    format = format.lower()
+    
+    if format == 'csv':
+        write_csv(results, output_path, include_summary=include_summary)
+    elif format == 'json':
+        write_json(results, output_path, include_summary=include_summary)
+    elif format == 'yaml':
+        write_yaml(results, output_path, include_summary=include_summary)
+    else:
+        raise ValueError(f"Unsupported format: {format}. Supported formats: csv, json, yaml")
 
 
 def format_table(results: List[Dict[str, Any]], include_summary: bool = True) -> str:

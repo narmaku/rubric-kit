@@ -1,6 +1,8 @@
 """YAML validation logic for rubric files."""
 
 import yaml
+import os
+import re
 from pathlib import Path
 from typing import Dict, List, Any, Union
 from pydantic import ValidationError
@@ -14,6 +16,47 @@ from rubric_kit.schema import (
 class RubricValidationError(Exception):
     """Custom exception for rubric validation errors."""
     pass
+
+
+def expand_env_vars(data: Any) -> Any:
+    """
+    Recursively expand environment variables in YAML data.
+    
+    Supports the following syntax:
+    - ${ENV_VAR_NAME} - expands to environment variable value
+    - ${ENV_VAR_NAME:-default_value} - expands with default if not set
+    
+    Args:
+        data: YAML data structure (dict, list, string, or primitive)
+        
+    Returns:
+        Data with environment variables expanded
+    """
+    if isinstance(data, dict):
+        return {key: expand_env_vars(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [expand_env_vars(item) for item in data]
+    elif isinstance(data, str):
+        # Pattern matches ${VAR_NAME} or ${VAR_NAME:-default}
+        pattern = r'\$\{([^}:]+)(?::-([^}]*))?\}'
+        
+        def replace_env_var(match):
+            var_name = match.group(1)
+            default_value = match.group(2)
+            
+            # Get environment variable or use default
+            value = os.getenv(var_name)
+            if value is None:
+                if default_value is not None:
+                    return default_value
+                else:
+                    # If no default provided, keep the original syntax
+                    return match.group(0)
+            return value
+        
+        return re.sub(pattern, replace_env_var, data)
+    else:
+        return data
 
 
 def parse_nested_dict(data: Union[List[Dict], Dict]) -> List[Dict]:
@@ -154,6 +197,9 @@ def load_rubric(yaml_path: str) -> Rubric:
     if not isinstance(data, dict):
         raise RubricValidationError("YAML must contain a dictionary")
     
+    # Expand environment variables
+    data = expand_env_vars(data)
+    
     # Parse dimensions
     dimensions = []
     if "dimensions" in data:
@@ -221,6 +267,9 @@ def load_judge_panel_config(yaml_path: str) -> JudgePanelConfig:
     
     if not isinstance(data, dict):
         raise RubricValidationError("YAML must contain a dictionary")
+    
+    # Expand environment variables
+    data = expand_env_vars(data)
     
     # Look for judge_panel section
     if "judge_panel" not in data:

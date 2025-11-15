@@ -1,0 +1,76 @@
+dimensions:
+  - factual_correctness:
+      description: Assesses whether the information in the final response is accurate and consistent with validated sources or tool outputs.
+      grading_type: binary # pass/fail
+  - output_content:
+      description: Evaluates if the response includes all expected details and covers relevant aspects of the requested content.
+      grading_type: binary # pass/fail
+  - usefulness:
+      description: Measures how well the response fulfills the original request in terms of practical value and completeness.
+      grading_type: score
+      pass_above: 2
+      scores:
+        1: The response is irrelevant or fails to address the original request in any meaningful way.
+        2: The response provides some value but leaves important steps or information missing, resulting in a partial or incomplete answer.
+        3: The response fully satisfies the user’s request, delivering all essential and expected information in a helpful manner.
+  - tool_usage:
+      description: Evaluates the selection and correct use of required tool(s) to address the original request.
+      grading_type: binary # pass/fail
+
+criteria:
+  sys_info_distro:
+    category: Accuracy
+    weight: 3
+    dimension: factual_correctness
+    criterion: The response accurately identifies the operating system as Fedora Linux 42.
+  sys_info_cpu:
+    category: Accuracy
+    weight: 3
+    dimension: factual_correctness
+    criterion: The response accurately reports there are 8 physical CPUs.
+  sys_info_memory:
+    category: Accuracy
+    weight: 3
+    dimension: factual_correctness
+    criterion: The response accurately states the total physical RAM is 64 GB.
+  extra_info_network:
+    category: Output Content
+    weight: 1
+    dimension: output_content
+    criterion: The response provides information for at least one network interface.
+  extra_info_disks:
+    category: Output Content
+    weight: 1
+    dimension: output_content
+    criterion: The response provides information about system disk space usage.
+  useful_answer:
+    category: Usefulness
+    weight: from_scores
+    dimension: usefulness
+    criterion: from_scores
+  tool_call_sys_info:
+    category: Tool Usage
+    weight: 3
+    dimension: tool_usage
+    tool_calls:
+      respect_order: false
+      required:
+        - get_system_information:
+            min_calls: 1
+            max_calls: 1
+            params: # If no params need to be checked, this can be omitted
+              hostname: 10.9.9.1
+              username: root
+        - get_cpu_information:
+            min_calls: 1
+            max_calls: 1
+        - get_memory_information:
+            min_calls: 1
+            max_calls: 1
+      optional:
+        - get_network_interfaces:
+            max_calls: 1
+        - get_disk_usage:
+            max_calls: 1
+      prohibited:
+        - get_weather:

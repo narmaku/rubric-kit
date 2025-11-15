@@ -14,6 +14,7 @@ def execute_judges(
     criterion: Optional[Criterion] = None,
     chat_content: str = "",
     dimension: Optional[Dimension] = None,
+    parsed_session: Optional[Any] = None,
     batch_size: int = 2,
     timeout: int = 30
 ) -> List[Dict[str, Any]]:
@@ -23,11 +24,12 @@ def execute_judges(
     Args:
         judges: List of judge configurations
         judge_function: Function to call for each judge evaluation
-                       Should have signature: (judge_config, criterion, chat_content, dimension) -> Dict
+                       Should have signature: (judge_config, criterion, chat_content, dimension, parsed_session) -> Dict
         execution_mode: Execution strategy ("sequential", "parallel", "batched")
         criterion: Criterion to evaluate (optional, passed to judge_function)
         chat_content: Chat session content to evaluate
         dimension: Dimension for score-based criteria (optional)
+        parsed_session: Optional pre-parsed chat session (optional, passed to judge_function)
         batch_size: Batch size for batched mode
         timeout: Timeout per judge call in seconds
         
@@ -43,11 +45,11 @@ def execute_judges(
         raise ValueError("No judges provided")
     
     if execution_mode == "sequential":
-        return _execute_sequential(judges, judge_function, criterion, chat_content, dimension, timeout)
+        return _execute_sequential(judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout)
     elif execution_mode == "parallel":
-        return _execute_parallel(judges, judge_function, criterion, chat_content, dimension, timeout)
+        return _execute_parallel(judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout)
     elif execution_mode == "batched":
-        return _execute_batched(judges, judge_function, criterion, chat_content, dimension, batch_size, timeout)
+        return _execute_batched(judges, judge_function, criterion, chat_content, dimension, parsed_session, batch_size, timeout)
     else:
         raise ValueError(f"Invalid execution mode: {execution_mode}")
 
@@ -58,6 +60,7 @@ def _execute_sequential(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     timeout: int
 ) -> List[Dict[str, Any]]:
     """Execute judges one by one in sequence."""
@@ -72,6 +75,7 @@ def _execute_sequential(
                 criterion,
                 chat_content,
                 dimension,
+                parsed_session,
                 timeout
             )
             # Add judge name to result
@@ -93,6 +97,7 @@ def _execute_parallel(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     timeout: int
 ) -> List[Dict[str, Any]]:
     """Execute all judges in parallel using asyncio."""
@@ -103,6 +108,7 @@ def _execute_parallel(
         criterion,
         chat_content,
         dimension,
+        parsed_session,
         timeout
     ))
 
@@ -113,6 +119,7 @@ async def _execute_parallel_async(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     timeout: int
 ) -> List[Dict[str, Any]]:
     """Async helper for parallel execution."""
@@ -129,6 +136,7 @@ async def _execute_parallel_async(
             criterion,
             chat_content,
             dimension,
+            parsed_session,
             timeout
         )
         tasks.append(task)
@@ -145,6 +153,7 @@ def _execute_batched(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     batch_size: int,
     timeout: int
 ) -> List[Dict[str, Any]]:
@@ -162,6 +171,7 @@ def _execute_batched(
             criterion,
             chat_content,
             dimension,
+            parsed_session,
             timeout
         ))
         
@@ -176,6 +186,7 @@ def _call_judge_with_timeout(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     timeout: int
 ) -> Dict[str, Any]:
     """Call judge function with timeout using ThreadPoolExecutor."""
@@ -185,7 +196,8 @@ def _call_judge_with_timeout(
             judge,
             criterion,
             chat_content,
-            dimension
+            dimension,
+            parsed_session
         )
         try:
             result = future.result(timeout=timeout)
@@ -200,6 +212,7 @@ def _call_judge_safe(
     criterion: Optional[Criterion],
     chat_content: str,
     dimension: Optional[Dimension],
+    parsed_session: Optional[Any],
     timeout: int
 ) -> Dict[str, Any]:
     """Safely call judge function, catching errors."""
@@ -210,6 +223,7 @@ def _call_judge_safe(
             criterion,
             chat_content,
             dimension,
+            parsed_session,
             timeout
         )
         # Add judge name to result

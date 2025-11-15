@@ -299,3 +299,117 @@ def test_evaluate_criterion_with_api_error(simple_rubric, sample_chat_session_fi
                 dimension=dimension,
                 panel_config=single_judge_panel
             )
+
+
+# ============================================================================
+# Consensus Reason Building Tests
+# ============================================================================
+
+def test_build_consensus_reason_single_judge():
+    """Test that single judge reason is returned without label."""
+    from rubric_kit.llm_judge import _build_consensus_reason
+    
+    consensus_result = {
+        "passes": True,
+        "judge_votes": [
+            {"judge": "primary", "passes": True, "reason": "All criteria met"}
+        ]
+    }
+    
+    reason = _build_consensus_reason(consensus_result)
+    # Single judge: no label added
+    assert reason == "All criteria met"
+
+
+def test_build_consensus_reason_multi_judge_agreement():
+    """Test that multi-judge agreement returns one labeled reason."""
+    from rubric_kit.llm_judge import _build_consensus_reason
+    
+    consensus_result = {
+        "passes": True,
+        "judge_votes": [
+            {"judge": "primary", "passes": True, "reason": "Reason from primary"},
+            {"judge": "secondary", "passes": True, "reason": "Reason from secondary"},
+            {"judge": "tertiary", "passes": True, "reason": "Reason from tertiary"}
+        ]
+    }
+    
+    # Set seed for reproducible test
+    import random
+    random.seed(42)
+    
+    reason = _build_consensus_reason(consensus_result)
+    
+    # Should contain one of the agreeing judges' reasons with label
+    assert " (from " in reason
+    assert reason.endswith(")")
+    
+    # Verify it's one of the agreeing judges
+    possible_reasons = [
+        "Reason from primary (from primary)",
+        "Reason from secondary (from secondary)",
+        "Reason from tertiary (from tertiary)"
+    ]
+    assert reason in possible_reasons
+
+
+def test_build_consensus_reason_partial_agreement():
+    """Test that only agreeing judges' reasons are considered."""
+    from rubric_kit.llm_judge import _build_consensus_reason
+    
+    consensus_result = {
+        "passes": True,  # Final decision is PASS
+        "judge_votes": [
+            {"judge": "primary", "passes": True, "reason": "I agree it passes"},
+            {"judge": "secondary", "passes": False, "reason": "I disagree"},
+            {"judge": "tertiary", "passes": True, "reason": "This passes"}
+        ]
+    }
+    
+    # Set seed for reproducible test
+    import random
+    random.seed(42)
+    
+    reason = _build_consensus_reason(consensus_result)
+    
+    # Should only include reasons from judges who voted PASS
+    assert " (from " in reason
+    assert "I disagree" not in reason
+    
+    # Should be one of the agreeing judges
+    possible_reasons = [
+        "I agree it passes (from primary)",
+        "This passes (from tertiary)"
+    ]
+    assert reason in possible_reasons
+
+
+def test_build_consensus_reason_score_agreement():
+    """Test reason building for score-based criteria."""
+    from rubric_kit.llm_judge import _build_consensus_reason
+    
+    consensus_result = {
+        "score": 3,  # Final score
+        "judge_votes": [
+            {"judge": "primary", "score": 3, "reason": "Excellent quality"},
+            {"judge": "secondary", "score": 2, "reason": "Good but not great"},
+            {"judge": "tertiary", "score": 3, "reason": "Outstanding work"}
+        ]
+    }
+    
+    # Set seed for reproducible test
+    import random
+    random.seed(42)
+    
+    reason = _build_consensus_reason(consensus_result)
+    
+    # Should only include reasons from judges who gave score 3
+    assert " (from " in reason
+    assert "Good but not great" not in reason
+    
+    # Should be one of the agreeing judges
+    possible_reasons = [
+        "Excellent quality (from primary)",
+        "Outstanding work (from tertiary)"
+    ]
+    assert reason in possible_reasons

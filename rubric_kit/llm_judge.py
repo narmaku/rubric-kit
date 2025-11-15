@@ -2,6 +2,7 @@
 
 import re
 import os
+import random
 from typing import Dict, Any, Optional
 from pathlib import Path
 from openai import OpenAI
@@ -16,6 +17,8 @@ from rubric_kit.prompts import (
 )
 from rubric_kit.execution import execute_judges
 from rubric_kit.consensus import apply_binary_consensus, apply_score_consensus
+from rubric_kit.parser import parse_chat_session, ChatSession
+from rubric_kit.generator import parse_qa_input
 
 
 def read_chat_session(file_path: str) -> str:
@@ -111,7 +114,8 @@ def _single_judge_evaluate(
     judge_config: JudgeConfig,
     criterion: Criterion,
     chat_content: str,
-    dimension: Optional[Dimension]
+    dimension: Optional[Dimension],
+    parsed_session: Optional[ChatSession] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a criterion using a single judge.
@@ -123,6 +127,7 @@ def _single_judge_evaluate(
         criterion: The criterion to evaluate
         chat_content: The chat session content
         dimension: Optional dimension for score-based criteria
+        parsed_session: Optional pre-parsed chat session for structured evaluation
         
     Returns:
         Evaluation result dictionary
@@ -145,7 +150,14 @@ def _single_judge_evaluate(
     grading_type = dimension.grading_type if dimension else "binary"
     
     if criterion.tool_calls:
-        prompt = build_tool_call_evaluation_prompt(criterion, chat_content)
+        # For tool call evaluation, use pre-parsed sequence if available
+        tool_sequence = None
+        parsed_tool_calls = None
+        if parsed_session:
+            tool_sequence = parsed_session.get_tool_call_sequence()
+            # Get full tool call objects with parameters
+            parsed_tool_calls = sorted(parsed_session.tool_calls, key=lambda tc: tc.index)
+        prompt = build_tool_call_evaluation_prompt(criterion, chat_content, tool_sequence, parsed_tool_calls)
         evaluation_type = "tool_call"
         config = TOOL_CALL_EVALUATOR_CONFIG
     elif grading_type == "binary":
@@ -160,17 +172,39 @@ def _single_judge_evaluate(
         config = EVALUATOR_CONFIG
     
     # Call LLM
-    response = client.chat.completions.create(
-        model=judge_config.model,
-        messages=[
-            {"role": "system", "content": config.system_prompt},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=config.temperature,
-        max_tokens=config.max_tokens
-    )
+    try:
+        response = client.chat.completions.create(
+            model=judge_config.model,
+            messages=[
+                {"role": "system", "content": config.system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=config.temperature,
+            max_tokens=config.max_tokens
+        )
+    except Exception as e:
+        raise ValueError(
+            f"Judge evaluation failed: API call error for {judge_config.model}: {str(e)}"
+        )
     
-    llm_response = response.choices[0].message.content.strip()
+    # Handle None content (can happen with API compatibility issues or safety filters)
+    content = response.choices[0].message.content
+    if content is None:
+        # Debug info: show response structure
+        import json
+        try:
+            response_dict = response.model_dump() if hasattr(response, 'model_dump') else response.dict()
+            response_json = json.dumps(response_dict, indent=2, default=str)
+        except:
+            response_json = str(response)
+        
+        raise ValueError(
+            f"Judge evaluation failed: {judge_config.model} returned empty content. "
+            f"This may be due to API compatibility issues, content filters, or refusal responses.\n"
+            f"Response structure:\n{response_json}"
+        )
+    
+    llm_response = content.strip()
     
     # Parse response based on evaluation type
     if evaluation_type in ("binary", "tool_call"):
@@ -191,7 +225,8 @@ def evaluate_criterion_with_panel(
     criterion: Criterion,
     chat_content: str,
     dimension: Optional[Dimension],
-    panel_config: JudgePanelConfig
+    panel_config: JudgePanelConfig,
+    parsed_session: Optional[ChatSession] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a single criterion using a judge panel.
@@ -201,6 +236,7 @@ def evaluate_criterion_with_panel(
         chat_content: The chat session content
         dimension: Dimension for score-based criteria (optional)
         panel_config: Judge panel configuration
+        parsed_session: Optional pre-parsed chat session for structured evaluation
         
     Returns:
         Evaluation result dictionary with consensus information:
@@ -217,6 +253,7 @@ def evaluate_criterion_with_panel(
         criterion=criterion,
         chat_content=chat_content,
         dimension=dimension,
+        parsed_session=parsed_session,
         batch_size=panel_config.execution.batch_size,
         timeout=panel_config.execution.timeout
     )
@@ -277,21 +314,23 @@ def _build_consensus_reason(consensus_result: Dict[str, Any]) -> str:
     """
     Build a human-readable reason from consensus result.
     
-    Extracts reasons from judges that agreed on the final result.
+    Extracts one reason from judges that agreed on the final result.
+    If there's agreement, randomly selects one agreeing judge's reason
+    and labels it with the judge name.
     
     Args:
         consensus_result: Result from apply_binary_consensus or apply_score_consensus
         
     Returns:
-        Combined reason string from agreeing judges
+        Reason string from one agreeing judge, labeled with judge name
     """
     judge_votes = consensus_result["judge_votes"]
     
     if len(judge_votes) == 1:
-        # Single judge: use their reason directly
+        # Single judge: use their reason directly (no label needed)
         return judge_votes[0].get("reason", "")
     
-    # Multiple judges: combine reasons from agreeing judges
+    # Multiple judges: select one reason from agreeing judges
     # Determine what the final decision was
     if "passes" in consensus_result:
         # Binary criterion
@@ -302,15 +341,17 @@ def _build_consensus_reason(consensus_result: Dict[str, Any]) -> str:
         final_score = consensus_result["score"]
         agreeing_judges = [v for v in judge_votes if v.get("score") == final_score]
     
-    # Combine reasons from agreeing judges
+    # Select one reason from agreeing judges
     if agreeing_judges:
-        reasons = [v.get("reason", "") for v in agreeing_judges if v.get("reason")]
-        if reasons:
-            # Join with semicolons and truncate if too long
-            combined = "; ".join(reasons)
-            if len(combined) > 500:
-                combined = combined[:497] + "..."
-            return combined
+        judges_with_reasons = [v for v in agreeing_judges if v.get("reason")]
+        if judges_with_reasons:
+            # Randomly select one agreeing judge
+            selected = random.choice(judges_with_reasons)
+            reason = selected.get("reason", "")
+            judge_name = selected.get("judge", "unknown")
+            
+            # Format with judge label
+            return f"{reason} (from {judge_name})"
     
     # Fallback: use first judge's reason
     return judge_votes[0].get("reason", "") if judge_votes else ""
@@ -319,7 +360,8 @@ def _build_consensus_reason(consensus_result: Dict[str, Any]) -> str:
 def evaluate_rubric_with_panel(
     rubric: Rubric,
     chat_session_file: str,
-    panel_config: JudgePanelConfig
+    panel_config: JudgePanelConfig,
+    use_parser: bool = True
 ) -> Dict[str, Dict[str, Any]]:
     """
     Evaluate all criteria in a rubric using a judge panel.
@@ -328,12 +370,23 @@ def evaluate_rubric_with_panel(
         rubric: The rubric to evaluate
         chat_session_file: Path to the chat session file
         panel_config: Judge panel configuration
+        use_parser: Whether to pre-parse the chat session for structured evaluation (default: True)
         
     Returns:
         Dictionary mapping criterion names to evaluation results
     """
     # Read chat session
     chat_content = read_chat_session(chat_session_file)
+    
+    # Parse chat session if requested
+    parsed_session = None
+    if use_parser:
+        try:
+            parsed_session = parse_chat_session(chat_content)
+            print(f"Parsed chat session: found {len(parsed_session.tool_calls)} tool calls")
+        except Exception as e:
+            print(f"Warning: Failed to parse chat session: {e}")
+            print("Falling back to raw content evaluation")
     
     evaluations = {}
     
@@ -348,7 +401,62 @@ def evaluate_rubric_with_panel(
             criterion=criterion,
             chat_content=chat_content,
             dimension=dimension,
-            panel_config=panel_config
+            panel_config=panel_config,
+            parsed_session=parsed_session
+        )
+        
+        evaluations[criterion.name] = evaluation
+    
+    return evaluations
+
+
+def evaluate_rubric_with_panel_from_qa(
+    rubric: Rubric,
+    qna_file: str,
+    panel_config: JudgePanelConfig
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Evaluate all criteria in a rubric using a judge panel, from a Q&A YAML file.
+    
+    Args:
+        rubric: The rubric to evaluate
+        qna_file: Path to Q&A YAML file (must contain question, answer, optional context)
+        panel_config: Judge panel configuration
+        
+    Returns:
+        Dictionary mapping criterion names to evaluation results
+    """
+    # Parse Q&A file
+    qa_input = parse_qa_input(qna_file)
+    
+    # Format Q&A as text content for evaluation
+    # Combine question, answer, and optional context into a single text block
+    content_parts = []
+    content_parts.append(f"Question: {qa_input.question}")
+    content_parts.append(f"\nAnswer:\n{qa_input.answer}")
+    if qa_input.context:
+        content_parts.append(f"\n\nContext:\n{qa_input.context}")
+    
+    chat_content = "\n".join(content_parts)
+    
+    # Q&A format doesn't have tool calls, so don't use parser
+    parsed_session = None
+    
+    evaluations = {}
+    
+    for criterion in rubric.criteria:
+        # Get dimension for this criterion
+        dimension = rubric.get_dimension(criterion.dimension)
+        if not dimension:
+            raise ValueError(f"Dimension '{criterion.dimension}' not found for criterion '{criterion.name}'")
+        
+        # Evaluate criterion with panel
+        evaluation = evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel_config,
+            parsed_session=parsed_session
         )
         
         evaluations[criterion.name] = evaluation

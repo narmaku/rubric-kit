@@ -1,0 +1,61 @@
+# Example Judge Panel Configuration for Rubric Kit
+# ===================================================
+# This file demonstrates how to configure a multi-judge panel for more
+# reliable and robust evaluation results.
+#
+# Environment Variables:
+# You can reference environment variables using ${VAR_NAME} syntax.
+# You can also provide defaults: ${VAR_NAME:-default_value}
+
+judge_panel:
+  # List of judges (LLM models) that will evaluate each criterion
+  # Each judge evaluates independently, then results are combined via consensus
+  judges:
+    - name: Qwen3:8b
+      model: qwen3:8b
+      # API key can be null to use OPENAI_API_KEY environment variable, or none to use ollama
+      api_key: none
+      # Base URL can be null to use default OpenAI endpoint
+      base_url: http://localhost:11434/v1
+
+    - name: gemini-2.5-pro
+      model: gemini-2.5-pro
+      # Use environment variable syntax: ${ENV_VAR_NAME}
+      # Or with default value: ${ENV_VAR_NAME:-default_value}
+      api_key: ${GEMINI_API_KEY}
+      base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+
+  # Execution configuration: How judges are called
+  execution:
+    # Mode options:
+    # - "sequential": Call judges one by one (safest for rate limits, default)
+    # - "parallel": Call all judges simultaneously (fastest, may hit rate limits)
+    # - "batched": Call judges in batches (balanced approach)
+    mode: batched
+    
+    # Batch size (only used when mode is "batched")
+    # Determines how many judges are called simultaneously in each batch
+    batch_size: 3
+    
+    # Timeout in seconds for each individual judge call
+    # If a judge takes longer than this, it will be considered failed
+    timeout: 240
+  
+  # Consensus configuration: How judge votes are combined
+  consensus:
+    # Mode options:
+    # - "quorum": Specific number of judges must agree (threshold required)
+    # - "majority": More than 50% must agree (threshold auto-calculated)
+    # - "unanimous": All judges must agree (threshold = number of judges)
+    mode: quorum
+    
+    # Threshold: Minimum number of judges that must agree on the same result
+    # Required for "quorum" mode, auto-calculated for "majority" and "unanimous"
+    # In this example with 3 judges and threshold 2: at least 2 must agree
+    threshold: 2
+    
+    # What to do when consensus is not reached:
+    # - "fail": Use conservative approach (minimum score or fail) - DEFAULT
+    # - "median": Use median of all judge scores (for score-based criteria)
+    # - "most_common": Use most frequent result (ties broken conservatively)
+    on_no_consensus: fail

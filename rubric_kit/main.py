@@ -7,10 +7,12 @@ import yaml
 
 from rubric_kit.validator import load_rubric, load_judge_panel_config, RubricValidationError
 from rubric_kit.processor import evaluate_rubric, calculate_total_score, calculate_percentage_score
-from rubric_kit.output import write_csv, print_table
-from rubric_kit.llm_judge import evaluate_rubric_with_panel
-from rubric_kit.generator import RubricGenerator, parse_qa_input
+from rubric_kit.output import write_results, print_table
+from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.generator import RubricGenerator, parse_qa_input, parse_chat_session
 from rubric_kit.schema import JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
+
+
 
 
 def cmd_evaluate(args) -> int:
@@ -53,18 +55,31 @@ def cmd_evaluate(args) -> int:
             )
             print(f"\n🤖 Using single judge: {args.model}")
         
-        # Evaluate with LLM judge panel
-        print(f"\nEvaluating chat session from {args.chat_session_file}...")
-        print(f"   Execution mode: {panel_config.execution.mode}")
-        print(f"   Consensus mode: {panel_config.consensus.mode}")
-        if panel_config.consensus.mode in ("quorum", "majority"):
-            print(f"   Consensus threshold: {panel_config.consensus.threshold}")
-        
-        evaluations = evaluate_rubric_with_panel(
-            rubric,
-            args.chat_session_file,
-            panel_config
-        )
+        # Determine input type and evaluate
+        if args.qna_file:
+            print(f"\nEvaluating Q&A from {args.qna_file}...")
+            print(f"   Execution mode: {panel_config.execution.mode}")
+            print(f"   Consensus mode: {panel_config.consensus.mode}")
+            if panel_config.consensus.mode in ("quorum", "majority"):
+                print(f"   Consensus threshold: {panel_config.consensus.threshold}")
+            
+            evaluations = evaluate_rubric_with_panel_from_qa(
+                rubric,
+                args.qna_file,
+                panel_config
+            )
+        else:
+            print(f"\nEvaluating chat session from {args.chat_session_file}...")
+            print(f"   Execution mode: {panel_config.execution.mode}")
+            print(f"   Consensus mode: {panel_config.consensus.mode}")
+            if panel_config.consensus.mode in ("quorum", "majority"):
+                print(f"   Consensus threshold: {panel_config.consensus.threshold}")
+            
+            evaluations = evaluate_rubric_with_panel(
+                rubric,
+                args.chat_session_file,
+                panel_config
+            )
         print(f"✓ Evaluated {len(evaluations)} criteria")
         
         # Process scores
@@ -77,10 +92,16 @@ def cmd_evaluate(args) -> int:
         
         print(f"✓ Evaluation complete: {total_score}/{max_score} ({percentage:.1f}%)")
         
-        # Write CSV
-        print(f"\nWriting results to {args.output_file}...")
-        write_csv(results, args.output_file, include_summary=args.include_summary)
-        print(f"✓ CSV file written")
+        # Determine output format
+        output_format = getattr(args, 'format', None)
+        if output_format is None:
+            from rubric_kit.output import detect_format_from_extension
+            output_format = detect_format_from_extension(args.output_file)
+        
+        format_name = output_format.upper()
+        print(f"\nWriting results to {args.output_file} ({format_name})...")
+        write_results(results, args.output_file, format=output_format, include_summary=args.include_summary)
+        print(f"✓ {format_name} file written")
         
         # Print table
         if not args.no_table:
@@ -125,11 +146,24 @@ def cmd_generate(args) -> int:
             print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
             return 1
         
-        # Parse Q&A input
-        print(f"Loading Q&A pair from {args.qa_file}...")
-        qa_input = parse_qa_input(args.qa_file)
-        print(f"✓ Loaded Q&A pair")
-        print(f"   Q: {qa_input.question[:80]}{'...' if len(qa_input.question) > 80 else ''}")
+        # Determine input type and parse accordingly
+        if args.qna_file:
+            # Parse Q&A YAML file
+            print(f"Loading Q&A from {args.qna_file}...")
+            qa_input = parse_qa_input(args.qna_file)
+            print(f"✓ Loaded Q&A pair")
+            print(f"   Q: {qa_input.question[:80]}{'...' if len(qa_input.question) > 80 else ''}")
+            input_obj = qa_input
+            input_type = "qa"
+        else:
+            # Parse chat session file
+            print(f"Loading chat session from {args.chat_session_file}...")
+            chat_input = parse_chat_session(args.chat_session_file)
+            print(f"✓ Loaded chat session")
+            print(f"   Content length: {len(chat_input.content)} characters")
+            print(f"   The LLM will analyze the session to detect tool calls and structure")
+            input_obj = chat_input
+            input_type = "chat"
         
         # Parse category hints if provided
         category_hints = None
@@ -146,16 +180,35 @@ def cmd_generate(args) -> int:
             base_url=args.base_url
         )
         
+        # Parse dimension and criteria counts (support "auto" keyword)
+        num_dimensions = None if args.num_dimensions == "auto" else int(args.num_dimensions)
+        num_criteria = None if args.num_criteria == "auto" else int(args.num_criteria)
+        
         # Generate rubric
-        print(f"\n🔄 Generating rubric with {args.num_dimensions} dimensions and {args.num_criteria} criteria...")
+        if num_dimensions is None and num_criteria is None:
+            print(f"\n🔄 Generating rubric with auto-detected dimensions and criteria...")
+        elif num_dimensions is None:
+            print(f"\n🔄 Generating rubric with auto-detected dimensions and {num_criteria} criteria...")
+        elif num_criteria is None:
+            print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and auto-detected criteria...")
+        else:
+            print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and {num_criteria} criteria...")
         print("   This may take a moment...")
         
-        rubric = generator.generate_rubric(
-            qa_input,
-            num_dimensions=args.num_dimensions,
-            num_criteria=args.num_criteria,
-            category_hints=category_hints
-        )
+        if input_type == "chat":
+            rubric = generator.generate_rubric_from_chat(
+                input_obj,
+                num_dimensions=num_dimensions,
+                num_criteria=num_criteria,
+                category_hints=category_hints
+            )
+        else:
+            rubric = generator.generate_rubric(
+                input_obj,
+                num_dimensions=num_dimensions,
+                num_criteria=num_criteria,
+                category_hints=category_hints
+            )
         
         print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
         
@@ -175,17 +228,55 @@ def cmd_generate(args) -> int:
         
         rubric_dict["criteria"] = {}
         for criterion in rubric.criteria:
-            rubric_dict["criteria"][criterion.name] = {
+            crit_dict = {
                 "category": criterion.category,
                 "weight": criterion.weight,
                 "dimension": criterion.dimension,
                 "criterion": criterion.criterion
             }
+            # Add tool_calls if present
+            if criterion.tool_calls:
+                # Use list format where each item is a dict with tool name as key
+                required_list = []
+                for tc in criterion.tool_calls.required:
+                    tool_dict = {}
+                    if tc.min_calls is not None:
+                        tool_dict["min_calls"] = tc.min_calls
+                    if tc.max_calls is not None:
+                        tool_dict["max_calls"] = tc.max_calls
+                    if tc.params:
+                        tool_dict["params"] = tc.params
+                    # Create dict with tool name as key
+                    required_list.append({tc.name: tool_dict if tool_dict else None})
+                
+                optional_list = []
+                for tc in criterion.tool_calls.optional:
+                    tool_dict = {}
+                    if tc.max_calls is not None:
+                        tool_dict["max_calls"] = tc.max_calls
+                    if tc.params:
+                        tool_dict["params"] = tc.params
+                    optional_list.append({tc.name: tool_dict if tool_dict else None})
+                
+                prohibited_list = []
+                for tc in criterion.tool_calls.prohibited:
+                    prohibited_list.append({tc.name: None})
+                
+                crit_dict["tool_calls"] = {
+                    "respect_order": criterion.tool_calls.respect_order,
+                    "required": required_list,
+                    "optional": optional_list if optional_list else [],
+                    "prohibited": prohibited_list if prohibited_list else []
+                }
+            rubric_dict["criteria"][criterion.name] = crit_dict
         
         # Write to file
         print(f"\nWriting rubric to {args.output_yaml}...")
         with open(args.output_yaml, 'w') as f:
-            yaml.dump(rubric_dict, f, sort_keys=False, default_flow_style=False)
+            yaml.dump(rubric_dict, f, 
+                     sort_keys=False, 
+                     default_flow_style=False,
+                     allow_unicode=True)
         
         print(f"✓ Rubric written successfully")
         
@@ -278,12 +369,47 @@ def cmd_refine(args) -> int:
         
         rubric_dict["criteria"] = {}
         for criterion in refined_rubric.criteria:
-            rubric_dict["criteria"][criterion.name] = {
+            crit_dict = {
                 "category": criterion.category,
                 "weight": criterion.weight,
                 "dimension": criterion.dimension,
                 "criterion": criterion.criterion
             }
+            # Add tool_calls if present
+            if criterion.tool_calls:
+                # Use list format where each item is a dict with tool name as key
+                required_list = []
+                for tc in criterion.tool_calls.required:
+                    tool_dict = {}
+                    if tc.min_calls is not None:
+                        tool_dict["min_calls"] = tc.min_calls
+                    if tc.max_calls is not None:
+                        tool_dict["max_calls"] = tc.max_calls
+                    if tc.params:
+                        tool_dict["params"] = tc.params
+                    # Create dict with tool name as key
+                    required_list.append({tc.name: tool_dict if tool_dict else None})
+                
+                optional_list = []
+                for tc in criterion.tool_calls.optional:
+                    tool_dict = {}
+                    if tc.max_calls is not None:
+                        tool_dict["max_calls"] = tc.max_calls
+                    if tc.params:
+                        tool_dict["params"] = tc.params
+                    optional_list.append({tc.name: tool_dict if tool_dict else None})
+                
+                prohibited_list = []
+                for tc in criterion.tool_calls.prohibited:
+                    prohibited_list.append({tc.name: None})
+                
+                crit_dict["tool_calls"] = {
+                    "respect_order": criterion.tool_calls.respect_order,
+                    "required": required_list,
+                    "optional": optional_list if optional_list else [],
+                    "prohibited": prohibited_list if prohibited_list else []
+                }
+            rubric_dict["criteria"][criterion.name] = crit_dict
         
         # Determine output path
         output_path = args.output if args.output else args.rubric_yaml
@@ -291,7 +417,10 @@ def cmd_refine(args) -> int:
         # Write to file
         print(f"\nWriting refined rubric to {output_path}...")
         with open(output_path, 'w') as f:
-            yaml.dump(rubric_dict, f, sort_keys=False, default_flow_style=False)
+            yaml.dump(rubric_dict, f, 
+                     sort_keys=False, 
+                     default_flow_style=False,
+                     allow_unicode=True)
         
         print(f"✓ Refined rubric written successfully")
         
@@ -353,20 +482,31 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage
-  %(prog)s chat_session.txt rubric.yaml results.csv
+  # Evaluate from Q&A YAML file
+  %(prog)s --from-qna qna.yaml rubric.yaml results.csv
+  
+  # Evaluate from chat session file
+  %(prog)s --from-chat-session chat_session.txt rubric.yaml results.csv
   
   # With custom model
-  %(prog)s chat.txt rubric.yaml output.csv --model gpt-4-turbo
+  %(prog)s --from-chat-session chat.txt rubric.yaml output.csv --model gpt-4-turbo
   
   # With custom OpenAI-compatible endpoint
-  %(prog)s chat.txt rubric.yaml output.csv --base-url https://api.example.com/v1
+  %(prog)s --from-chat-session chat.txt rubric.yaml output.csv --base-url https://api.example.com/v1
 """
     )
     
-    evaluate_parser.add_argument(
-        'chat_session_file',
-        help='Path to chat session file (plain text)'
+    # Mutually exclusive input format options
+    input_group = evaluate_parser.add_mutually_exclusive_group(required=True)
+    input_group.add_argument(
+        '--from-qna',
+        dest='qna_file',
+        help='Path to Q&A YAML file (must contain question, answer, and optional context keys)'
+    )
+    input_group.add_argument(
+        '--from-chat-session',
+        dest='chat_session_file',
+        help='Path to chat session file (any format, will use heuristics to parse)'
     )
     
     evaluate_parser.add_argument(
@@ -376,7 +516,13 @@ Examples:
     
     evaluate_parser.add_argument(
         'output_file',
-        help='Path to output CSV file'
+        help='Path to output file (CSV, JSON, or YAML). Format is auto-detected from extension (.csv, .json, .yaml, .yml)'
+    )
+    
+    evaluate_parser.add_argument(
+        '--format',
+        choices=['csv', 'json', 'yaml'],
+        help='Output format (csv, json, yaml). If not specified, format is detected from file extension.'
     )
     
     evaluate_parser.add_argument(
@@ -417,24 +563,35 @@ Examples:
     # ========== GENERATE subcommand ==========
     generate_parser = subparsers.add_parser(
         'generate',
-        help='Generate a rubric from a Q&A pair',
+        help='Generate a rubric from a Q&A pair or chat session',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Basic usage
-  %(prog)s qa_input.txt output_rubric.yaml
+  # Generate from Q&A YAML file
+  %(prog)s --from-qna qna.yaml output_rubric.yaml
+  
+  # Generate from chat session file
+  %(prog)s --from-chat-session session.txt output_rubric.yaml
   
   # With custom parameters
-  %(prog)s qa.txt rubric.yaml --num-dimensions 5 --num-criteria 8
+  %(prog)s --from-qna qna.yaml rubric.yaml --num-dimensions 5 --num-criteria 8
   
   # With category hints
-  %(prog)s qa.txt rubric.yaml --categories "Output,Reasoning,Completeness"
+  %(prog)s --from-chat-session session.txt rubric.yaml --categories "Tools,Output,Reasoning"
 """
     )
     
-    generate_parser.add_argument(
-        'qa_file',
-        help='Path to Q&A file (text or YAML format)'
+    # Mutually exclusive input format options
+    generate_input_group = generate_parser.add_mutually_exclusive_group(required=True)
+    generate_input_group.add_argument(
+        '--from-qna',
+        dest='qna_file',
+        help='Path to Q&A YAML file (must contain question, answer, and optional context keys)'
+    )
+    generate_input_group.add_argument(
+        '--from-chat-session',
+        dest='chat_session_file',
+        help='Path to chat session file (any format, will use heuristics to parse)'
     )
     
     generate_parser.add_argument(
@@ -444,16 +601,16 @@ Examples:
     
     generate_parser.add_argument(
         '--num-dimensions',
-        type=int,
-        default=5,
-        help='Number of dimensions to generate (1-10, default: 5)'
+        type=str,
+        default="auto",
+        help='Number of dimensions to generate (1-10 or "auto", default: auto)'
     )
     
     generate_parser.add_argument(
         '--num-criteria',
-        type=int,
-        default=7,
-        help='Number of criteria to generate (1-10, default: 7)'
+        type=str,
+        default="auto",
+        help='Number of criteria to generate (1-10 or "auto", default: auto)'
     )
     
     generate_parser.add_argument(

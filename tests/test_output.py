@@ -4,6 +4,8 @@ import pytest
 import tempfile
 import os
 import csv
+import json
+import yaml
 from io import StringIO
 
 
@@ -184,4 +186,211 @@ def test_empty_results():
         assert os.path.exists(temp_path)
     finally:
         os.unlink(temp_path)
+
+
+def test_write_json(sample_results):
+    """Test writing results to JSON."""
+    from rubric_kit.output import write_json
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_json(sample_results, temp_path)
+        
+        # Read back and verify
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "results" in data
+        assert len(data["results"]) == 3
+        assert data["results"][0]["criterion_name"] == "fact_1"
+        assert data["results"][0]["score"] == 3
+        assert data["results"][1]["result"] == "fail"
+        assert data["results"][2]["score_description"] == "Very useful"
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_json_with_summary(sample_results):
+    """Test that JSON includes summary when requested."""
+    from rubric_kit.output import write_json
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_json(sample_results, temp_path, include_summary=True)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "summary" in data
+        assert data["summary"]["criterion_name"] == "TOTAL"
+        assert data["summary"]["score"] == 6  # 3+0+3
+        assert data["summary"]["max_score"] == 8  # 3+2+3
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_yaml(sample_results):
+    """Test writing results to YAML."""
+    from rubric_kit.output import write_yaml
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_yaml(sample_results, temp_path)
+        
+        # Read back and verify
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        assert "results" in data
+        assert len(data["results"]) == 3
+        assert data["results"][0]["criterion_name"] == "fact_1"
+        assert data["results"][0]["score"] == 3
+        assert data["results"][1]["result"] == "fail"
+        assert data["results"][2]["score_description"] == "Very useful"
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_yaml_with_summary(sample_results):
+    """Test that YAML includes summary when requested."""
+    from rubric_kit.output import write_yaml
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_yaml(sample_results, temp_path, include_summary=True)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        assert "summary" in data
+        assert data["summary"]["criterion_name"] == "TOTAL"
+        assert data["summary"]["score"] == 6  # 3+0+3
+        assert data["summary"]["max_score"] == 8  # 3+2+3
+    finally:
+        os.unlink(temp_path)
+
+
+def test_detect_format_from_extension():
+    """Test format detection from file extension."""
+    from rubric_kit.output import detect_format_from_extension
+    
+    assert detect_format_from_extension("output.csv") == "csv"
+    assert detect_format_from_extension("output.json") == "json"
+    assert detect_format_from_extension("output.yaml") == "yaml"
+    assert detect_format_from_extension("output.yml") == "yaml"
+    assert detect_format_from_extension("output.txt") == "csv"  # Default
+
+
+def test_write_results_csv(sample_results):
+    """Test write_results function with CSV format."""
+    from rubric_kit.output import write_results
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_results(sample_results, temp_path, format="csv")
+        
+        # Read back and verify
+        with open(temp_path, 'r') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        
+        assert len(rows) == 3
+        assert rows[0]["criterion_name"] == "fact_1"
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_results_json(sample_results):
+    """Test write_results function with JSON format."""
+    from rubric_kit.output import write_results
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_results(sample_results, temp_path, format="json")
+        
+        # Read back and verify
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "results" in data
+        assert len(data["results"]) == 3
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_results_yaml(sample_results):
+    """Test write_results function with YAML format."""
+    from rubric_kit.output import write_results
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_results(sample_results, temp_path, format="yaml")
+        
+        # Read back and verify
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        assert "results" in data
+        assert len(data["results"]) == 3
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_results_auto_detect(sample_results):
+    """Test write_results function with auto-detection from extension."""
+    from rubric_kit.output import write_results
+    
+    # Test JSON auto-detection
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json_path = f.name
+    
+    # Test YAML auto-detection
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+    
+    try:
+        write_results(sample_results, json_path)  # Should auto-detect JSON
+        write_results(sample_results, yaml_path)  # Should auto-detect YAML
+        
+        # Verify JSON
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+        assert "results" in json_data
+        
+        # Verify YAML
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            yaml_data = yaml.safe_load(f)
+        assert "results" in yaml_data
+    finally:
+        os.unlink(json_path)
+        os.unlink(yaml_path)
+
+
+def test_write_results_invalid_format(sample_results):
+    """Test write_results function with invalid format."""
+    from rubric_kit.output import write_results
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        with pytest.raises(ValueError, match="Unsupported format"):
+            write_results(sample_results, temp_path, format="invalid")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 

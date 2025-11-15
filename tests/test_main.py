@@ -3,9 +3,10 @@
 import pytest
 import tempfile
 import os
+import yaml
 from unittest.mock import patch, Mock
 
-from rubric_kit.schema import Rubric, Dimension, Criterion, Criterion
+from rubric_kit.schema import Rubric, Dimension, Criterion
 
 
 @pytest.fixture
@@ -426,4 +427,6 @@ def test_cli_no_subcommand():
     # Should either show help or return error
     result = main()
     assert result != 0 or result is None
+
+
 

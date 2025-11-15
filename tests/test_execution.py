@@ -9,7 +9,7 @@ import asyncio
 # Mock Judge Function
 # ============================================================================
 
-def mock_judge_function(judge_config, criterion, chat_content, dimension=None):
+def mock_judge_function(judge_config, criterion, chat_content, dimension=None, parsed_session=None):
     """Mock judge function that returns a deterministic result."""
     # Return result based on judge name
     if "pass" in judge_config.name:
@@ -62,7 +62,7 @@ def test_execute_judges_sequential_with_timeout():
     from rubric_kit.schema import JudgeConfig
     import time
     
-    def slow_judge_function(judge_config, criterion, chat_content, dimension=None):
+    def slow_judge_function(judge_config, criterion, chat_content, dimension=None, parsed_session=None):
         """Judge function that takes time."""
         time.sleep(0.1)
         return {"type": "binary", "passes": True, "reason": "Slow result"}
@@ -251,7 +251,7 @@ def test_execute_judges_with_failing_judge():
     from rubric_kit.execution import execute_judges
     from rubric_kit.schema import JudgeConfig
     
-    def failing_judge_function(judge_config, criterion, chat_content, dimension=None):
+    def failing_judge_function(judge_config, criterion, chat_content, dimension=None, parsed_session=None):
         """Judge function that fails for specific judge."""
         if judge_config.name == "judge_error":
             raise Exception("Judge evaluation failed")
