@@ -111,7 +111,7 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
         return "No results to display."
     
     # Prepare table data with simplified columns
-    headers = ["Criterion", "Category", "Result", "Score", "Consensus", "Agreement"]
+    headers = ["Criterion", "Dimension", "Result", "Score", "Consensus", "Agreement"]
     rows = []
     
     for result in results:
@@ -135,7 +135,7 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
         
         row = [
             result.get("criterion_name", ""),
-            result.get("category", ""),
+            result.get("dimension", ""),
             result_str,
             f"{score}/{max_score}",
             consensus_indicator,

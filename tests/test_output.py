@@ -104,6 +104,7 @@ def test_format_table(sample_results):
     # Check for score columns
     assert "3" in table_str
     # Check that new simplified columns are included
+    assert "Dimension" in table_str
     assert "Consensus" in table_str
     assert "Agreement" in table_str
 
