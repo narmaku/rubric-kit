@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Dict, List, Any, Union
 from pydantic import ValidationError
 
-from rubric_kit.schema import Rubric, Descriptor, Criterion, ToolCalls, ToolSpec
+from rubric_kit.schema import (
+    Rubric, Dimension, Criterion, ToolCalls, ToolSpec,
+    JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
+)
 
 
 class RubricValidationError(Exception):
@@ -21,7 +24,7 @@ def parse_nested_dict(data: Union[List[Dict], Dict]) -> List[Dict]:
     1. Nested format: [{"key1": {"field1": "val1"}}, ...]
     2. Flat format with name as first string key: [{"name": "desc", "field1": "val1"}, ...]
     
-    For descriptors, converts:
+    For dimensions, converts:
         [{"factual_correctness": "Description text", "grading_type": "binary"}]
     To:
         [{"name": "factual_correctness", "description": "Description text", "grading_type": "binary"}]
@@ -151,15 +154,15 @@ def load_rubric(yaml_path: str) -> Rubric:
     if not isinstance(data, dict):
         raise RubricValidationError("YAML must contain a dictionary")
     
-    # Parse descriptors
-    descriptors = []
-    if "descriptors" in data:
-        descriptors_data = parse_nested_dict(data["descriptors"])
-        for desc_data in descriptors_data:
+    # Parse dimensions
+    dimensions = []
+    if "dimensions" in data:
+        dimensions_data = parse_nested_dict(data["dimensions"])
+        for dim_data in dimensions_data:
             try:
-                descriptors.append(Descriptor(**desc_data))
+                dimensions.append(Dimension(**dim_data))
             except ValidationError as e:
-                raise RubricValidationError(f"Validation error in descriptor '{desc_data.get('name', 'unknown')}': {e}")
+                raise RubricValidationError(f"Validation error in dimension '{dim_data.get('name', 'unknown')}': {e}")
     
     # Parse criteria
     criteria = []
@@ -180,9 +183,94 @@ def load_rubric(yaml_path: str) -> Rubric:
     
     # Create and validate rubric
     try:
-        rubric = Rubric(descriptors=descriptors, criteria=criteria)
+        rubric = Rubric(dimensions=dimensions, criteria=criteria)
     except ValidationError as e:
         raise RubricValidationError(f"Validation error: {e}")
     
     return rubric
+
+
+def load_judge_panel_config(yaml_path: str) -> JudgePanelConfig:
+    """
+    Load and validate judge panel configuration from a YAML file.
+    
+    The judge panel configuration can be in a standalone file or embedded
+    in the rubric YAML under the 'judge_panel' key.
+    
+    Args:
+        yaml_path: Path to the YAML file
+        
+    Returns:
+        Validated JudgePanelConfig object
+        
+    Raises:
+        RubricValidationError: If the file is invalid or validation fails
+    """
+    yaml_file = Path(yaml_path)
+    
+    # Check if file exists
+    if not yaml_file.exists():
+        raise RubricValidationError(f"File not found: {yaml_path}")
+    
+    # Load YAML
+    try:
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise RubricValidationError(f"Invalid YAML syntax: {e}")
+    
+    if not isinstance(data, dict):
+        raise RubricValidationError("YAML must contain a dictionary")
+    
+    # Look for judge_panel section
+    if "judge_panel" not in data:
+        raise RubricValidationError("judge_panel section not found in YAML file")
+    
+    panel_data = data["judge_panel"]
+    
+    if not isinstance(panel_data, dict):
+        raise RubricValidationError("judge_panel must be a dictionary")
+    
+    # Parse judges
+    if "judges" not in panel_data:
+        raise RubricValidationError("judges list not found in judge_panel")
+    
+    judges_data = panel_data["judges"]
+    if not isinstance(judges_data, list):
+        raise RubricValidationError("judges must be a list")
+    
+    judges = []
+    for judge_data in judges_data:
+        try:
+            judges.append(JudgeConfig(**judge_data))
+        except ValidationError as e:
+            raise RubricValidationError(f"Validation error in judge '{judge_data.get('name', 'unknown')}': {e}")
+    
+    # Parse execution config (optional, has defaults)
+    execution = ExecutionConfig()
+    if "execution" in panel_data:
+        try:
+            execution = ExecutionConfig(**panel_data["execution"])
+        except ValidationError as e:
+            raise RubricValidationError(f"Validation error in execution config: {e}")
+    
+    # Parse consensus config (optional, has defaults)
+    consensus = ConsensusConfig()
+    if "consensus" in panel_data:
+        try:
+            consensus = ConsensusConfig(**panel_data["consensus"])
+        except ValidationError as e:
+            raise RubricValidationError(f"Validation error in consensus config: {e}")
+    
+    # Create and validate judge panel config
+    try:
+        panel_config = JudgePanelConfig(
+            judges=judges,
+            execution=execution,
+            consensus=consensus
+        )
+    except ValidationError as e:
+        raise RubricValidationError(f"Validation error in judge panel config: {e}")
+    
+    return panel_config
 
