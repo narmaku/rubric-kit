@@ -3,112 +3,69 @@
 import argparse
 import sys
 import os
+import yaml
 
-from rubric_kit.validator import load_rubric, RubricValidationError
+from rubric_kit.validator import load_rubric, load_judge_panel_config, RubricValidationError
 from rubric_kit.processor import evaluate_rubric, calculate_total_score, calculate_percentage_score
 from rubric_kit.output import write_csv, print_table
-from rubric_kit.llm_judge import evaluate_rubric_with_llm
+from rubric_kit.llm_judge import evaluate_rubric_with_panel
+from rubric_kit.generator import RubricGenerator, parse_qa_input
+from rubric_kit.schema import JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
 
 
-def main() -> int:
+def cmd_evaluate(args) -> int:
     """
-    Main CLI entry point.
+    Execute the 'evaluate' subcommand.
     
+    Args:
+        args: Parsed command-line arguments
+        
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    parser = argparse.ArgumentParser(
-        description="Rubric Kit - Automatic rubric evaluation using LLM-as-a-Judge",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Basic usage
-  %(prog)s chat_session.txt rubric.yaml results.csv
-  
-  # With custom model
-  %(prog)s chat.txt rubric.yaml output.csv --model gpt-4-turbo
-  
-  # With custom OpenAI-compatible endpoint
-  %(prog)s chat.txt rubric.yaml output.csv --base-url https://api.example.com/v1
-
-Chat session file format (plain text):
-  User: What are the system specifications?
-  Assistant: The system has 8 CPUs and 64 GB of RAM.
-  
-  Tool calls:
-  - get_system_information() -> {"cpus": 8, "ram_gb": 64}
-"""
-    )
-    
-    parser.add_argument(
-        'chat_session_file',
-        help='Path to chat session file (plain text)'
-    )
-    
-    parser.add_argument(
-        'rubric_yaml',
-        help='Path to rubric YAML file'
-    )
-    
-    parser.add_argument(
-        'output_file',
-        help='Path to output CSV file'
-    )
-    
-    parser.add_argument(
-        '--no-table',
-        action='store_true',
-        help='Do not print results table to console'
-    )
-    
-    parser.add_argument(
-        '--include-summary',
-        action='store_true',
-        help='Include summary row in CSV output'
-    )
-    
-    parser.add_argument(
-        '--api-key',
-        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
-    )
-    
-    parser.add_argument(
-        '--base-url',
-        help='Base URL for OpenAI-compatible endpoint (optional)'
-    )
-    
-    parser.add_argument(
-        '--model',
-        default='gpt-4',
-        help='Model name to use for LLM evaluation (default: gpt-4)'
-    )
-    
-    args = parser.parse_args()
-    
     try:
         # Load rubric
         print(f"Loading rubric from {args.rubric_yaml}...")
         rubric = load_rubric(args.rubric_yaml)
-        print(f"✓ Loaded {len(rubric.descriptors)} descriptors and {len(rubric.criteria)} criteria")
+        print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
         
-        # Get API key
-        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
-            return 1
+        # Load or create judge panel configuration
+        if args.judge_panel_config:
+            print(f"\nLoading judge panel configuration from {args.judge_panel_config}...")
+            panel_config = load_judge_panel_config(args.judge_panel_config)
+            print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
+        else:
+            # Create default single-judge panel
+            api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
+                return 1
+            
+            panel_config = JudgePanelConfig(
+                judges=[JudgeConfig(
+                    name="default",
+                    model=args.model,
+                    api_key=api_key,
+                    base_url=args.base_url
+                )],
+                execution=ExecutionConfig(mode="sequential"),
+                consensus=ConsensusConfig(mode="unanimous")
+            )
+            print(f"\n🤖 Using single judge: {args.model}")
         
-        # Evaluate with LLM judge
-        print(f"\n🤖 Using LLM judge to evaluate chat session from {args.chat_session_file}...")
-        print(f"   Model: {args.model}")
+        # Evaluate with LLM judge panel
+        print(f"\nEvaluating chat session from {args.chat_session_file}...")
+        print(f"   Execution mode: {panel_config.execution.mode}")
+        print(f"   Consensus mode: {panel_config.consensus.mode}")
+        if panel_config.consensus.mode in ("quorum", "majority"):
+            print(f"   Consensus threshold: {panel_config.consensus.threshold}")
         
-        evaluations = evaluate_rubric_with_llm(
+        evaluations = evaluate_rubric_with_panel(
             rubric,
             args.chat_session_file,
-            api_key=api_key,
-            base_url=args.base_url,
-            model=args.model
+            panel_config
         )
-        print(f"✓ LLM evaluated {len(evaluations)} criteria")
+        print(f"✓ Evaluated {len(evaluations)} criteria")
         
         # Process scores
         print("\nProcessing scores...")
@@ -151,6 +108,439 @@ Chat session file format (plain text):
         return 1
 
 
+def cmd_generate(args) -> int:
+    """
+    Execute the 'generate' subcommand.
+    
+    Args:
+        args: Parsed command-line arguments
+        
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    try:
+        # Get API key
+        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
+            return 1
+        
+        # Parse Q&A input
+        print(f"Loading Q&A pair from {args.qa_file}...")
+        qa_input = parse_qa_input(args.qa_file)
+        print(f"✓ Loaded Q&A pair")
+        print(f"   Q: {qa_input.question[:80]}{'...' if len(qa_input.question) > 80 else ''}")
+        
+        # Parse category hints if provided
+        category_hints = None
+        if args.categories:
+            category_hints = [c.strip() for c in args.categories.split(',')]
+            print(f"   Category hints: {', '.join(category_hints)}")
+        
+        # Initialize generator
+        print(f"\n🤖 Initializing rubric generator...")
+        print(f"   Model: {args.model}")
+        generator = RubricGenerator(
+            api_key=api_key,
+            model=args.model,
+            base_url=args.base_url
+        )
+        
+        # Generate rubric
+        print(f"\n🔄 Generating rubric with {args.num_dimensions} dimensions and {args.num_criteria} criteria...")
+        print("   This may take a moment...")
+        
+        rubric = generator.generate_rubric(
+            qa_input,
+            num_dimensions=args.num_dimensions,
+            num_criteria=args.num_criteria,
+            category_hints=category_hints
+        )
+        
+        print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+        
+        # Convert rubric to YAML format
+        rubric_dict = {
+            "dimensions": []
+        }
+        
+        for dim in rubric.dimensions:
+            dim_dict = {
+                dim.name: dim.description,
+                "grading_type": dim.grading_type
+            }
+            if dim.scores:
+                dim_dict["scores"] = dim.scores
+            rubric_dict["dimensions"].append(dim_dict)
+        
+        rubric_dict["criteria"] = {}
+        for criterion in rubric.criteria:
+            rubric_dict["criteria"][criterion.name] = {
+                "category": criterion.category,
+                "weight": criterion.weight,
+                "dimension": criterion.dimension,
+                "criterion": criterion.criterion
+            }
+        
+        # Write to file
+        print(f"\nWriting rubric to {args.output_yaml}...")
+        with open(args.output_yaml, 'w') as f:
+            yaml.dump(rubric_dict, f, sort_keys=False, default_flow_style=False)
+        
+        print(f"✓ Rubric written successfully")
+        
+        # Print summary
+        print("\n" + "=" * 80)
+        print("GENERATED RUBRIC SUMMARY")
+        print("=" * 80)
+        print(f"\nDimensions ({len(rubric.dimensions)}):")
+        for dim in rubric.dimensions:
+            print(f"  • {dim.name} ({dim.grading_type})")
+        
+        print(f"\nCriteria ({len(rubric.criteria)}):")
+        for crit in rubric.criteria:
+            print(f"  • {crit.name} [{crit.category}] - {crit.dimension}")
+        print()
+        
+        return 0
+        
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def cmd_refine(args) -> int:
+    """
+    Execute the 'refine' subcommand.
+    
+    Args:
+        args: Parsed command-line arguments
+        
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    try:
+        # Get API key
+        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
+            return 1
+        
+        # Load existing rubric
+        print(f"Loading rubric from {args.rubric_yaml}...")
+        rubric = load_rubric(args.rubric_yaml)
+        print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+        
+        # Initialize generator
+        print(f"\n🤖 Initializing rubric refiner...")
+        print(f"   Model: {args.model}")
+        generator = RubricGenerator(
+            api_key=api_key,
+            model=args.model,
+            base_url=args.base_url
+        )
+        
+        # Refine rubric
+        feedback_msg = f" with feedback" if args.feedback else ""
+        print(f"\n🔄 Refining rubric{feedback_msg}...")
+        if args.feedback:
+            print(f"   Feedback: {args.feedback}")
+        print("   This may take a moment...")
+        
+        refined_rubric = generator.refine_rubric(
+            rubric,
+            feedback=args.feedback
+        )
+        
+        print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
+        
+        # Convert rubric to YAML format
+        rubric_dict = {
+            "dimensions": []
+        }
+        
+        for dim in refined_rubric.dimensions:
+            dim_dict = {
+                dim.name: dim.description,
+                "grading_type": dim.grading_type
+            }
+            if dim.scores:
+                dim_dict["scores"] = dim.scores
+            rubric_dict["dimensions"].append(dim_dict)
+        
+        rubric_dict["criteria"] = {}
+        for criterion in refined_rubric.criteria:
+            rubric_dict["criteria"][criterion.name] = {
+                "category": criterion.category,
+                "weight": criterion.weight,
+                "dimension": criterion.dimension,
+                "criterion": criterion.criterion
+            }
+        
+        # Determine output path
+        output_path = args.output if args.output else args.rubric_yaml
+        
+        # Write to file
+        print(f"\nWriting refined rubric to {output_path}...")
+        with open(output_path, 'w') as f:
+            yaml.dump(rubric_dict, f, sort_keys=False, default_flow_style=False)
+        
+        print(f"✓ Refined rubric written successfully")
+        
+        # Print summary
+        print("\n" + "=" * 80)
+        print("REFINED RUBRIC SUMMARY")
+        print("=" * 80)
+        print(f"\nDimensions ({len(refined_rubric.dimensions)}):")
+        for dim in refined_rubric.dimensions:
+            print(f"  • {dim.name} ({dim.grading_type})")
+        
+        print(f"\nCriteria ({len(refined_rubric.criteria)}):")
+        for crit in refined_rubric.criteria:
+            print(f"  • {crit.name} [{crit.category}] - {crit.dimension}")
+        print()
+        
+        return 0
+        
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except RubricValidationError as e:
+        print(f"Rubric validation error: {e}", file=sys.stderr)
+        return 1
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def main() -> int:
+    """
+    Main CLI entry point with subcommands.
+    
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    parser = argparse.ArgumentParser(
+        description="Rubric Kit - Automatic rubric evaluation using LLM-as-a-Judge",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    # Create subparsers
+    subparsers = parser.add_subparsers(
+        title='commands',
+        description='Available commands',
+        dest='command',
+        help='Command to execute'
+    )
+    
+    # ========== EVALUATE subcommand ==========
+    evaluate_parser = subparsers.add_parser(
+        'evaluate',
+        help='Evaluate a chat session against a rubric',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage
+  %(prog)s chat_session.txt rubric.yaml results.csv
+  
+  # With custom model
+  %(prog)s chat.txt rubric.yaml output.csv --model gpt-4-turbo
+  
+  # With custom OpenAI-compatible endpoint
+  %(prog)s chat.txt rubric.yaml output.csv --base-url https://api.example.com/v1
+"""
+    )
+    
+    evaluate_parser.add_argument(
+        'chat_session_file',
+        help='Path to chat session file (plain text)'
+    )
+    
+    evaluate_parser.add_argument(
+        'rubric_yaml',
+        help='Path to rubric YAML file'
+    )
+    
+    evaluate_parser.add_argument(
+        'output_file',
+        help='Path to output CSV file'
+    )
+    
+    evaluate_parser.add_argument(
+        '--no-table',
+        action='store_true',
+        help='Do not print results table to console'
+    )
+    
+    evaluate_parser.add_argument(
+        '--include-summary',
+        action='store_true',
+        help='Include summary row in CSV output'
+    )
+    
+    evaluate_parser.add_argument(
+        '--judge-panel-config',
+        help='Path to judge panel configuration YAML file (optional, creates single-judge panel if not provided)'
+    )
+    
+    evaluate_parser.add_argument(
+        '--api-key',
+        help='OpenAI API key (or set OPENAI_API_KEY environment variable) - used for default single-judge panel'
+    )
+    
+    evaluate_parser.add_argument(
+        '--base-url',
+        help='Base URL for OpenAI-compatible endpoint (optional) - used for default single-judge panel'
+    )
+    
+    evaluate_parser.add_argument(
+        '--model',
+        default='gpt-4',
+        help='Model name to use for LLM evaluation (default: gpt-4) - used for default single-judge panel'
+    )
+    
+    evaluate_parser.set_defaults(func=cmd_evaluate)
+    
+    # ========== GENERATE subcommand ==========
+    generate_parser = subparsers.add_parser(
+        'generate',
+        help='Generate a rubric from a Q&A pair',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage
+  %(prog)s qa_input.txt output_rubric.yaml
+  
+  # With custom parameters
+  %(prog)s qa.txt rubric.yaml --num-dimensions 5 --num-criteria 8
+  
+  # With category hints
+  %(prog)s qa.txt rubric.yaml --categories "Output,Reasoning,Completeness"
+"""
+    )
+    
+    generate_parser.add_argument(
+        'qa_file',
+        help='Path to Q&A file (text or YAML format)'
+    )
+    
+    generate_parser.add_argument(
+        'output_yaml',
+        help='Path to output rubric YAML file'
+    )
+    
+    generate_parser.add_argument(
+        '--num-dimensions',
+        type=int,
+        default=5,
+        help='Number of dimensions to generate (1-10, default: 5)'
+    )
+    
+    generate_parser.add_argument(
+        '--num-criteria',
+        type=int,
+        default=7,
+        help='Number of criteria to generate (1-10, default: 7)'
+    )
+    
+    generate_parser.add_argument(
+        '--categories',
+        help='Comma-separated list of category hints (e.g., "Output,Reasoning")'
+    )
+    
+    generate_parser.add_argument(
+        '--api-key',
+        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
+    )
+    
+    generate_parser.add_argument(
+        '--base-url',
+        help='Base URL for OpenAI-compatible endpoint (optional)'
+    )
+    
+    generate_parser.add_argument(
+        '--model',
+        default='gpt-4',
+        help='Model name to use for generation (default: gpt-4)'
+    )
+    
+    generate_parser.set_defaults(func=cmd_generate)
+    
+    # ========== REFINE subcommand ==========
+    refine_parser = subparsers.add_parser(
+        'refine',
+        help='Refine an existing rubric',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage (overwrites original)
+  %(prog)s rubric.yaml
+  
+  # With feedback
+  %(prog)s rubric.yaml --feedback "Add more specific criteria"
+  
+  # With custom output path
+  %(prog)s rubric.yaml --output refined_rubric.yaml
+"""
+    )
+    
+    refine_parser.add_argument(
+        'rubric_yaml',
+        help='Path to existing rubric YAML file'
+    )
+    
+    refine_parser.add_argument(
+        '--feedback',
+        help='Specific feedback for refinement (optional)'
+    )
+    
+    refine_parser.add_argument(
+        '--output',
+        help='Output path for refined rubric (default: overwrite original)'
+    )
+    
+    refine_parser.add_argument(
+        '--api-key',
+        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
+    )
+    
+    refine_parser.add_argument(
+        '--base-url',
+        help='Base URL for OpenAI-compatible endpoint (optional)'
+    )
+    
+    refine_parser.add_argument(
+        '--model',
+        default='gpt-4',
+        help='Model name to use for refinement (default: gpt-4)'
+    )
+    
+    refine_parser.set_defaults(func=cmd_refine)
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    # If no subcommand specified, print help and return error
+    if not hasattr(args, 'func'):
+        parser.print_help()
+        return 2
+    
+    # Execute the subcommand
+    return args.func(args)
+
+
 if __name__ == "__main__":
     sys.exit(main())
-
