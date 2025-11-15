@@ -32,7 +32,7 @@ def write_csv(
     fieldnames = sorted(list(fieldnames_set))
     
     # Ensure common fields come first
-    priority_fields = ["criterion_name", "category", "dimension", "criterion_text", "result", "score", "max_score"]
+    priority_fields = ["criterion_name", "category", "dimension", "criterion_text", "result", "score", "max_score", "reason"]
     ordered_fieldnames = []
     for field in priority_fields:
         if field in fieldnames:
@@ -79,15 +79,14 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
         return "No results to display."
     
     # Prepare table data
-    headers = ["Criterion", "Category", "Dimension", "Result", "Score", "Max Score"]
+    headers = ["Criterion", "Category", "Dimension", "Result", "Score", "Max Score", "Reason"]
     rows = []
     
     for result in results:
         result_str = str(result.get("result", ""))
         
-        # Add score description if available
-        if "score_description" in result and result["score_description"]:
-            result_str = f"{result_str} - {result['score_description']}"
+        # Get reason if available
+        reason = result.get("reason", "")
         
         row = [
             result.get("criterion_name", ""),
@@ -95,7 +94,8 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
             result.get("dimension", ""),
             result_str,
             result.get("score", 0),
-            result.get("max_score", 0)
+            result.get("max_score", 0),
+            reason
         ]
         rows.append(row)
     
@@ -111,7 +111,8 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
             "─" * 15,
             "─" * 10,
             "─" * 5,
-            "─" * 9
+            "─" * 9,
+            "─" * 30
         ])
         
         rows.append([
@@ -120,7 +121,8 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
             "",
             f"{percentage:.1f}%",
             total_score,
-            max_score
+            max_score,
+            ""
         ])
     
     # Format as table
