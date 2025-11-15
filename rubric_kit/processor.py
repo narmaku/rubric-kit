@@ -1,16 +1,27 @@
 """Score processing logic for rubric evaluation."""
 
 from typing import Dict, List, Any
-from rubric_kit.schema import Rubric, Criterion, Descriptor
+from rubric_kit.schema import Rubric, Criterion, Dimension
 
 
-def evaluate_binary_criterion(criterion: Criterion, passes: bool) -> Dict[str, Any]:
+def evaluate_binary_criterion(
+    criterion: Criterion, 
+    passes: bool, 
+    reason: str = "",
+    consensus_reached: bool = True,
+    consensus_count: int = 1,
+    judge_votes: List[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     """
     Evaluate a binary (pass/fail) criterion.
     
     Args:
         criterion: The criterion to evaluate
         passes: Whether the criterion passes
+        reason: Optional reasoning for the evaluation
+        consensus_reached: Whether consensus was reached
+        consensus_count: Number of judges that agreed
+        judge_votes: List of individual judge votes
         
     Returns:
         Dictionary with evaluation results
@@ -18,53 +29,85 @@ def evaluate_binary_criterion(criterion: Criterion, passes: bool) -> Dict[str, A
     weight = criterion.weight if isinstance(criterion.weight, int) else 0
     score = weight if passes else 0
     
-    return {
+    result = {
         "criterion_name": criterion.name,
         "criterion_text": criterion.criterion,
         "category": criterion.category,
         "dimension": criterion.dimension,
         "result": "pass" if passes else "fail",
         "score": score,
-        "max_score": weight
+        "max_score": weight,
+        "reason": reason,
+        "consensus_reached": consensus_reached,
+        "consensus_count": consensus_count
     }
+    
+    if judge_votes:
+        result["judge_votes"] = judge_votes
+    
+    return result
 
 
 def evaluate_score_criterion(
     criterion: Criterion, 
-    descriptor: Descriptor, 
-    score: int
+    dimension: Dimension, 
+    score: int,
+    reason: str = "",
+    consensus_reached: bool = True,
+    consensus_count: int = 1,
+    judge_votes: List[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a score-based criterion.
     
     Args:
         criterion: The criterion to evaluate
-        descriptor: The descriptor defining the score scale
+        dimension: The dimension defining the score scale
         score: The score value (e.g., 1-3)
+        reason: Optional reasoning/additional context for the score
+        consensus_reached: Whether consensus was reached
+        consensus_count: Number of judges that agreed
+        judge_votes: List of individual judge votes
         
     Returns:
         Dictionary with evaluation results
     """
-    if not descriptor.scores:
-        raise ValueError(f"Descriptor '{descriptor.name}' does not have scores defined")
+    if not dimension.scores:
+        raise ValueError(f"Dimension '{dimension.name}' does not have scores defined")
     
-    max_score = max(descriptor.scores.keys())
+    max_score = max(dimension.scores.keys())
     
-    if score not in descriptor.scores:
-        raise ValueError(f"Score {score} is not valid for descriptor '{descriptor.name}'")
+    if score not in dimension.scores:
+        raise ValueError(f"Score {score} is not valid for dimension '{dimension.name}'")
     
-    score_description = descriptor.scores.get(score, "")
+    score_description = dimension.scores.get(score, "")
     
-    return {
+    # Determine pass/fail based on pass_above threshold
+    if dimension.pass_above is not None:
+        passes = score >= dimension.pass_above
+        result = "pass" if passes else "fail"
+    else:
+        # No pass_above defined, result is just the numeric score
+        result = score
+    
+    result_dict = {
         "criterion_name": criterion.name,
         "criterion_text": criterion.criterion,
         "category": criterion.category,
         "dimension": criterion.dimension,
-        "result": score,
+        "result": result,
         "score": score,
         "max_score": max_score,
-        "score_description": score_description
+        "score_description": score_description,
+        "reason": reason,
+        "consensus_reached": consensus_reached,
+        "consensus_count": consensus_count
     }
+    
+    if judge_votes:
+        result_dict["judge_votes"] = judge_votes
+    
+    return result_dict
 
 
 def evaluate_rubric(rubric: Rubric, evaluations: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -96,7 +139,19 @@ def evaluate_rubric(rubric: Rubric, evaluations: Dict[str, Dict[str, Any]]) -> L
         
         if eval_type == "binary":
             passes = eval_data.get("passes", False)
-            result = evaluate_binary_criterion(criterion, passes)
+            reason = eval_data.get("reason", "")
+            consensus_reached = eval_data.get("consensus_reached", True)
+            consensus_count = eval_data.get("consensus_count", 1)
+            judge_votes = eval_data.get("judge_votes")
+            
+            result = evaluate_binary_criterion(
+                criterion, 
+                passes, 
+                reason,
+                consensus_reached=consensus_reached,
+                consensus_count=consensus_count,
+                judge_votes=judge_votes
+            )
             results.append(result)
             
         elif eval_type == "score":
@@ -104,12 +159,25 @@ def evaluate_rubric(rubric: Rubric, evaluations: Dict[str, Dict[str, Any]]) -> L
             if score is None:
                 raise ValueError(f"Score not provided for criterion '{criterion.name}'")
             
-            # Find the descriptor for this criterion
-            descriptor = rubric.get_descriptor(criterion.dimension)
-            if not descriptor:
-                raise ValueError(f"Descriptor '{criterion.dimension}' not found")
+            reason = eval_data.get("reason", "")
+            consensus_reached = eval_data.get("consensus_reached", True)
+            consensus_count = eval_data.get("consensus_count", 1)
+            judge_votes = eval_data.get("judge_votes")
             
-            result = evaluate_score_criterion(criterion, descriptor, score)
+            # Find the dimension for this criterion
+            dimension = rubric.get_dimension(criterion.dimension)
+            if not dimension:
+                raise ValueError(f"Dimension '{criterion.dimension}' not found")
+            
+            result = evaluate_score_criterion(
+                criterion, 
+                dimension, 
+                score, 
+                reason,
+                consensus_reached=consensus_reached,
+                consensus_count=consensus_count,
+                judge_votes=judge_votes
+            )
             results.append(result)
         else:
             raise ValueError(f"Unknown evaluation type '{eval_type}' for criterion '{criterion.name}'")
