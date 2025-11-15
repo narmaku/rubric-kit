@@ -277,25 +277,43 @@ def _build_consensus_reason(consensus_result: Dict[str, Any]) -> str:
     """
     Build a human-readable reason from consensus result.
     
+    Extracts reasons from judges that agreed on the final result.
+    
     Args:
         consensus_result: Result from apply_binary_consensus or apply_score_consensus
         
     Returns:
-        Human-readable reason string
+        Combined reason string from agreeing judges
     """
     judge_votes = consensus_result["judge_votes"]
-    consensus_reached = consensus_result["consensus_reached"]
-    consensus_count = consensus_result["consensus_count"]
     
     if len(judge_votes) == 1:
         # Single judge: use their reason directly
         return judge_votes[0].get("reason", "")
     
-    # Multiple judges: summarize consensus
-    if consensus_reached:
-        return f"Consensus reached ({consensus_count}/{len(judge_votes)} judges agreed)"
+    # Multiple judges: combine reasons from agreeing judges
+    # Determine what the final decision was
+    if "passes" in consensus_result:
+        # Binary criterion
+        final_result = consensus_result["passes"]
+        agreeing_judges = [v for v in judge_votes if v.get("passes") == final_result]
     else:
-        return f"No consensus reached (max agreement: {consensus_count}/{len(judge_votes)} judges)"
+        # Score criterion
+        final_score = consensus_result["score"]
+        agreeing_judges = [v for v in judge_votes if v.get("score") == final_score]
+    
+    # Combine reasons from agreeing judges
+    if agreeing_judges:
+        reasons = [v.get("reason", "") for v in agreeing_judges if v.get("reason")]
+        if reasons:
+            # Join with semicolons and truncate if too long
+            combined = "; ".join(reasons)
+            if len(combined) > 500:
+                combined = combined[:497] + "..."
+            return combined
+    
+    # Fallback: use first judge's reason
+    return judge_votes[0].get("reason", "") if judge_votes else ""
 
 
 def evaluate_rubric_with_panel(

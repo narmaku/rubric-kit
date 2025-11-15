@@ -80,7 +80,12 @@ def evaluate_score_criterion(
     if score not in dimension.scores:
         raise ValueError(f"Score {score} is not valid for dimension '{dimension.name}'")
     
-    score_description = dimension.scores.get(score, "")
+    # Build criterion text from dimension description and score definitions
+    # If criterion is "from_scores", use dimension description
+    if criterion.criterion == "from_scores":
+        criterion_text = dimension.description
+    else:
+        criterion_text = criterion.criterion
     
     # Determine pass/fail based on pass_above threshold
     if dimension.pass_above is not None:
@@ -92,13 +97,12 @@ def evaluate_score_criterion(
     
     result_dict = {
         "criterion_name": criterion.name,
-        "criterion_text": criterion.criterion,
+        "criterion_text": criterion_text,
         "category": criterion.category,
         "dimension": criterion.dimension,
         "result": result,
         "score": score,
         "max_score": max_score,
-        "score_description": score_description,
         "reason": reason,
         "consensus_reached": consensus_reached,
         "consensus_count": consensus_count
