@@ -68,7 +68,7 @@ EVALUATOR_CONFIG = LLMConfig(
 TOOL_CALL_EVALUATOR_CONFIG = LLMConfig(
     system_prompt=EVALUATOR_SYSTEM_PROMPT,
     temperature=0.0,  # Deterministic for consistent evaluation  
-    max_tokens=8192   # More tokens needed for structural comparison and reasoning
+    max_tokens=16384   # More tokens needed for structural comparison and reasoning
 )
 
 GENERATOR_CONFIG = LLMConfig(
@@ -127,8 +127,10 @@ Carefully read the criterion above and determine what it requires. Then evaluate
 
 **Step 2B - If checking PRESENCE:**
 1. Look for the required information in the chat session
-2. The information must be explicitly stated, not implied
-3. PASS if present, FAIL if missing or incomplete
+2. The information must be EXPLICITLY stated, not implied
+3. Do NOT make inferences - only PASS if the information is directly stated
+4. Do NOT consider related but different information - only exact matches count
+5. PASS if present, FAIL if missing or incomplete
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
@@ -221,11 +223,15 @@ def build_tool_call_evaluation_prompt(
     
     # Build numbered list of required tools for absolute clarity
     required_tool_list = ""
+    required_tool_list_numbered = ""
     if tool_calls.required:
         tool_items = []
+        tool_items_numbered = []
         for i, tool in enumerate(tool_calls.required, 1):
             tool_items.append(f"REQUIRED TOOL #{i}: {tool.name}")
+            tool_items_numbered.append(f"{i}. {tool.name}")
         required_tool_list = "\n".join(tool_items)
+        required_tool_list_numbered = "\n".join(tool_items_numbered)
     
     # Build explicit tool name lists for injection into instructions
     required_tool_names = [tool.name for tool in tool_calls.required] if tool_calls.required else []
@@ -288,6 +294,9 @@ def build_tool_call_evaluation_prompt(
             # With pre-parsed data: direct comparison
             evaluation_body = f"""**Evaluation Instructions:**
 
+Expected order:
+{required_tool_list_numbered}
+
 The specification requires these tools IN THIS EXACT ORDER:
 {required_tool_list}
 {actual_calls_section}
@@ -322,6 +331,9 @@ REASON: [One sentence. For order failures: state both the required order and act
             # Without pre-parsed data: must extract first
             evaluation_body = f"""**Evaluation Instructions:**
 
+Expected order:
+{required_tool_list_numbered}
+
 The specification requires these tools IN THIS EXACT ORDER:
 {required_tool_list}
 
@@ -336,8 +348,8 @@ The specification requires these tools IN THIS EXACT ORDER:
    - IMPORTANT: Use the actual tool names you found in the chat session, not placeholders
    
 3. **Compare against the required order**
-   - Position 1: Does first tool called = REQUIRED TOOL #1?
-   - Position 2: Does second tool called = REQUIRED TOOL #2?
+   - Position 1: Does first tool called = REQUIRED TOOL #1? (MUST match exactly)
+   - Position 2: Does second tool called = REQUIRED TOOL #2? (MUST match exactly)
    - Continue for all positions
    - If ANY position doesn't match → ORDER IS WRONG → FAIL
    

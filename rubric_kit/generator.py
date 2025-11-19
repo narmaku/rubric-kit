@@ -37,23 +37,31 @@ class ChatSessionInput:
 
 def parse_qa_input(file_path: str) -> QAInput:
     """
-    Parse Q&A input from a YAML file.
+    Parse Q&A input from a file.
     
-    Only supports YAML format with the following structure:
-    ```yaml
-    question: "The question text"
-    answer: "The answer text"
-    context: "Optional context"  # Optional
-    ```
+    Supports two formats:
+    1. YAML format with the following structure:
+       ```yaml
+       question: "The question text"
+       answer: "The answer text"
+       context: "Optional context"  # Optional
+       ```
+    
+    2. Simple text format:
+       ```
+       Q: The question text
+       A: The answer text
+       ```
+       (Answer can span multiple lines after "A:")
     
     Args:
-        file_path: Path to Q&A YAML file
+        file_path: Path to Q&A file
         
     Returns:
         QAInput object
         
     Raises:
-        ValueError: If file is empty, missing required fields, or not valid YAML
+        ValueError: If file is empty, missing required fields, or not valid format
         FileNotFoundError: If file doesn't exist
     """
     path = Path(file_path)
@@ -66,7 +74,58 @@ def parse_qa_input(file_path: str) -> QAInput:
     if not content:
         raise ValueError("Q&A file is empty")
     
-    # Parse YAML format
+    # Try parsing as simple Q:/A: text format first
+    # Check if content starts with A: or Q: (case-insensitive) or contains Q: pattern
+    first_line_stripped = content.split('\n')[0].strip()
+    is_simple_format = (
+        first_line_stripped.startswith("Q:") or 
+        first_line_stripped.startswith("q:") or
+        first_line_stripped.startswith("A:") or
+        first_line_stripped.startswith("a:") or
+        "\nQ:" in content or
+        "\nq:" in content
+    )
+    
+    if is_simple_format:
+        # Simple text format
+        lines = content.split('\n')
+        question = None
+        answer_lines = []
+        in_answer = False
+        
+        for line in lines:
+            line_stripped = line.strip()
+            # Check for question marker (case-insensitive)
+            if line_stripped.startswith("Q:") or line_stripped.startswith("q:"):
+                if question is not None:
+                    raise ValueError("Multiple questions found in Q&A file")
+                question = line_stripped[2:].strip()
+                in_answer = False
+            # Check for answer marker (case-insensitive)
+            elif line_stripped.startswith("A:") or line_stripped.startswith("a:"):
+                answer_lines = [line_stripped[2:].strip()]
+                in_answer = True
+            elif in_answer:
+                # Continue collecting answer lines
+                answer_lines.append(line)
+            elif question is None:
+                # Skip empty lines before question
+                if line_stripped:
+                    raise ValueError("Question not found")
+        
+        if question is None:
+            raise ValueError("Question not found")
+        
+        if not answer_lines:
+            raise ValueError("Answer not found")
+        
+        answer = '\n'.join(answer_lines).strip()
+        if not answer:
+            raise ValueError("Answer not found")
+        
+        return QAInput(question=question, answer=answer, context=None)
+    
+    # Otherwise, try parsing as YAML format
     try:
         data = yaml.safe_load(content)
         if not isinstance(data, dict):
