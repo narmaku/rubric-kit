@@ -35,6 +35,83 @@ class ChatSessionInput:
     context: Optional[str] = None
 
 
+def _is_simple_qa_format(content: str) -> bool:
+    """Check if content appears to be in simple Q:/A: format."""
+    first_line = content.split('\n')[0].strip()
+    return (
+        first_line.startswith(("Q:", "q:", "A:", "a:")) or
+        "\nQ:" in content or
+        "\nq:" in content
+    )
+
+
+def _parse_simple_qa_format(content: str) -> QAInput:
+    """Parse simple Q:/A: text format."""
+    lines = content.split('\n')
+    question = None
+    answer_lines = []
+    in_answer = False
+    
+    for line in lines:
+        line_stripped = line.strip()
+        
+        if line_stripped.startswith(("Q:", "q:")):
+            if question is not None:
+                raise ValueError("Multiple questions found in Q&A file")
+            question = line_stripped[2:].strip()
+            in_answer = False
+        elif line_stripped.startswith(("A:", "a:")):
+            answer_lines = [line_stripped[2:].strip()]
+            in_answer = True
+        elif in_answer:
+            answer_lines.append(line)
+        elif question is None and line_stripped:
+            raise ValueError("Question not found")
+    
+    if question is None:
+        raise ValueError("Question not found")
+    
+    if not answer_lines:
+        raise ValueError("Answer not found")
+    
+    answer = '\n'.join(answer_lines).strip()
+    if not answer:
+        raise ValueError("Answer not found")
+    
+    return QAInput(question=question, answer=answer, context=None)
+
+
+def _parse_yaml_qa_format(content: str) -> QAInput:
+    """Parse YAML format Q&A input."""
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML format: {e}")
+    
+    if not isinstance(data, dict):
+        raise ValueError("YAML file must contain a dictionary with 'question' and 'answer' keys")
+    
+    question = data.get("question", "").strip()
+    answer = data.get("answer", "").strip()
+    context = data.get("context")
+    
+    if not question:
+        raise ValueError("Required 'question' key not found or empty in YAML file")
+    if not answer:
+        raise ValueError("Required 'answer' key not found or empty in YAML file")
+    
+    # Handle multi-line answers (YAML block scalars)
+    if not isinstance(answer, str):
+        answer = str(answer)
+    answer = answer.strip()
+    
+    # Handle context similarly
+    if context is not None and isinstance(context, str):
+        context = context.strip() if context else None
+    
+    return QAInput(question=question, answer=answer, context=context)
+
+
 def parse_qa_input(file_path: str) -> QAInput:
     """
     Parse Q&A input from a file.
@@ -74,86 +151,10 @@ def parse_qa_input(file_path: str) -> QAInput:
     if not content:
         raise ValueError("Q&A file is empty")
     
-    # Try parsing as simple Q:/A: text format first
-    # Check if content starts with A: or Q: (case-insensitive) or contains Q: pattern
-    first_line_stripped = content.split('\n')[0].strip()
-    is_simple_format = (
-        first_line_stripped.startswith("Q:") or 
-        first_line_stripped.startswith("q:") or
-        first_line_stripped.startswith("A:") or
-        first_line_stripped.startswith("a:") or
-        "\nQ:" in content or
-        "\nq:" in content
-    )
+    if _is_simple_qa_format(content):
+        return _parse_simple_qa_format(content)
     
-    if is_simple_format:
-        # Simple text format
-        lines = content.split('\n')
-        question = None
-        answer_lines = []
-        in_answer = False
-        
-        for line in lines:
-            line_stripped = line.strip()
-            # Check for question marker (case-insensitive)
-            if line_stripped.startswith("Q:") or line_stripped.startswith("q:"):
-                if question is not None:
-                    raise ValueError("Multiple questions found in Q&A file")
-                question = line_stripped[2:].strip()
-                in_answer = False
-            # Check for answer marker (case-insensitive)
-            elif line_stripped.startswith("A:") or line_stripped.startswith("a:"):
-                answer_lines = [line_stripped[2:].strip()]
-                in_answer = True
-            elif in_answer:
-                # Continue collecting answer lines
-                answer_lines.append(line)
-            elif question is None:
-                # Skip empty lines before question
-                if line_stripped:
-                    raise ValueError("Question not found")
-        
-        if question is None:
-            raise ValueError("Question not found")
-        
-        if not answer_lines:
-            raise ValueError("Answer not found")
-        
-        answer = '\n'.join(answer_lines).strip()
-        if not answer:
-            raise ValueError("Answer not found")
-        
-        return QAInput(question=question, answer=answer, context=None)
-    
-    # Otherwise, try parsing as YAML format
-    try:
-        data = yaml.safe_load(content)
-        if not isinstance(data, dict):
-            raise ValueError("YAML file must contain a dictionary with 'question' and 'answer' keys")
-        
-        question = data.get("question", "").strip()
-        answer = data.get("answer", "").strip()
-        context = data.get("context")
-        
-        if not question:
-            raise ValueError("Required 'question' key not found or empty in YAML file")
-        if not answer:
-            raise ValueError("Required 'answer' key not found or empty in YAML file")
-        
-        # Handle multi-line answers (YAML block scalars)
-        if isinstance(answer, str):
-            answer = answer.strip()
-        else:
-            # If answer is not a string, convert to string
-            answer = str(answer).strip()
-        
-        # Handle context similarly
-        if context is not None and isinstance(context, str):
-            context = context.strip() if context else None
-        
-        return QAInput(question=question, answer=answer, context=context)
-    except yaml.YAMLError as e:
-        raise ValueError(f"Invalid YAML format: {e}")
+    return _parse_yaml_qa_format(content)
 
 
 def parse_chat_session(file_path: str) -> ChatSessionInput:
@@ -210,6 +211,79 @@ def repair_json(text: str) -> str:
     return text
 
 
+def _extract_json_from_response(content: str) -> str:
+    """Extract JSON content from LLM response, removing markdown code blocks."""
+    content = content.strip()
+    
+    if content.startswith("```json"):
+        content = content[7:]
+    elif content.startswith("```"):
+        content = content[3:]
+    
+    if content.endswith("```"):
+        content = content[:-3]
+    
+    return content.strip()
+
+
+def _parse_json_response(content: str) -> Any:
+    """Parse JSON from LLM response with error handling and repair attempts."""
+    original_content = content
+    
+    # Try direct parsing first
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        # Save error details for potential error message
+        first_error = e
+    
+    # Try repairing common issues
+    try:
+        repaired = repair_json(content)
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        # Repair failed, use original error details
+        error_lines = original_content.split('\n')
+        context_start = max(0, first_error.lineno - 3)
+        context_end = min(len(error_lines), first_error.lineno + 2)
+        context = '\n'.join(
+            f"  {i+1:3d}| {line}" 
+            for i, line in enumerate(error_lines[context_start:context_end], start=context_start)
+        )
+        
+        raise ValueError(
+            f"LLM returned invalid JSON. Error at line {first_error.lineno}, column {first_error.colno}: {first_error.msg}\n"
+            f"Context:\n{context}\n\n"
+            f"Full response:\n{original_content[:500]}{'...' if len(original_content) > 500 else ''}"
+        )
+
+
+def _convert_to_dimensions(response: List[Dict[str, Any]]) -> List[Dimension]:
+    """Convert LLM response to list of Dimension objects."""
+    dimensions = []
+    for item in response:
+        if "scores" in item and item["scores"]:
+            item["scores"] = {int(k): v for k, v in item["scores"].items()}
+        dimensions.append(Dimension(**item))
+    return dimensions
+
+
+def _convert_to_criteria(response: List[Dict[str, Any]]) -> List[Criterion]:
+    """Convert LLM response to list of Criterion objects."""
+    return [Criterion(**item) for item in response]
+
+
+def _validate_dimension_criteria_params(
+    num_dimensions: Optional[int],
+    num_criteria: Optional[int]
+) -> None:
+    """Validate dimension and criteria count parameters."""
+    if num_dimensions is not None and not 1 <= num_dimensions <= 10:
+        raise ValueError("num_dimensions must be between 1 and 10")
+    if num_criteria is not None and not 1 <= num_criteria <= 10:
+        raise ValueError("num_criteria must be between 1 and 10")
+
+
 class RubricGenerator:
     """Generate rubrics from Q&A pairs using LLM."""
     
@@ -249,17 +323,7 @@ class RubricGenerator:
             context=qa_input.context
         )
         response = self._call_llm(prompt)
-        
-        # Convert response to Dimension objects
-        dimensions = []
-        for item in response:
-            # Convert string keys to integers for scores
-            if "scores" in item and item["scores"]:
-                item["scores"] = {int(k): v for k, v in item["scores"].items()}
-            
-            dimensions.append(Dimension(**item))
-        
-        return dimensions
+        return _convert_to_dimensions(response)
     
     def generate_criteria(
         self,
@@ -289,13 +353,7 @@ class RubricGenerator:
             context=qa_input.context
         )
         response = self._call_llm(prompt, categories=category_hints)
-        
-        # Convert response to Criterion objects
-        criteria = []
-        for item in response:
-            criteria.append(Criterion(**item))
-        
-        return criteria
+        return _convert_to_criteria(response)
     
     def generate_rubric(
         self,
@@ -319,16 +377,9 @@ class RubricGenerator:
         Raises:
             ValueError: If parameters are out of range or generated rubric is invalid
         """
-        # Validate parameters
-        if num_dimensions is not None and not 1 <= num_dimensions <= 10:
-            raise ValueError("num_dimensions must be between 1 and 10")
-        if num_criteria is not None and not 1 <= num_criteria <= 10:
-            raise ValueError("num_criteria must be between 1 and 10")
+        _validate_dimension_criteria_params(num_dimensions, num_criteria)
         
-        # Phase 1: Generate dimensions
         dimensions = self.generate_dimensions(qa_input, num_dimensions)
-        
-        # Phase 2: Generate criteria
         criteria = self.generate_criteria(
             qa_input,
             dimensions,
@@ -336,10 +387,7 @@ class RubricGenerator:
             category_hints
         )
         
-        # Create and validate rubric
-        rubric = Rubric(dimensions=dimensions, criteria=criteria)
-        
-        return rubric
+        return Rubric(dimensions=dimensions, criteria=criteria)
     
     def refine_rubric(
         self,
@@ -363,20 +411,10 @@ class RubricGenerator:
         )
         response = self._call_llm(prompt)
         
-        # Convert response to Rubric
-        dimensions = []
-        for item in response["dimensions"]:
-            if "scores" in item and item["scores"]:
-                item["scores"] = {int(k): v for k, v in item["scores"].items()}
-            dimensions.append(Dimension(**item))
+        dimensions = _convert_to_dimensions(response["dimensions"])
+        criteria = _convert_to_criteria(response["criteria"])
         
-        criteria = []
-        for item in response["criteria"]:
-            criteria.append(Criterion(**item))
-        
-        refined_rubric = Rubric(dimensions=dimensions, criteria=criteria)
-        
-        return refined_rubric
+        return Rubric(dimensions=dimensions, criteria=criteria)
     
     def generate_dimensions_from_chat(
         self,
@@ -402,17 +440,7 @@ class RubricGenerator:
             context=chat_input.context
         )
         response = self._call_llm(prompt)
-        
-        # Convert response to Dimension objects
-        dimensions = []
-        for item in response:
-            # Convert string keys to integers for scores
-            if "scores" in item and item["scores"]:
-                item["scores"] = {int(k): v for k, v in item["scores"].items()}
-            
-            dimensions.append(Dimension(**item))
-        
-        return dimensions
+        return _convert_to_dimensions(response)
     
     def generate_criteria_from_chat(
         self,
@@ -444,13 +472,7 @@ class RubricGenerator:
             context=chat_input.context
         )
         response = self._call_llm(prompt, categories=category_hints)
-        
-        # Convert response to Criterion objects
-        criteria = []
-        for item in response:
-            criteria.append(Criterion(**item))
-        
-        return criteria
+        return _convert_to_criteria(response)
     
     def generate_rubric_from_chat(
         self,
@@ -477,16 +499,9 @@ class RubricGenerator:
         Raises:
             ValueError: If parameters are out of range or generated rubric is invalid
         """
-        # Validate parameters
-        if num_dimensions is not None and not 1 <= num_dimensions <= 10:
-            raise ValueError("num_dimensions must be between 1 and 10")
-        if num_criteria is not None and not 1 <= num_criteria <= 10:
-            raise ValueError("num_criteria must be between 1 and 10")
+        _validate_dimension_criteria_params(num_dimensions, num_criteria)
         
-        # Phase 1: Generate dimensions
         dimensions = self.generate_dimensions_from_chat(chat_input, num_dimensions)
-        
-        # Phase 2: Generate criteria
         criteria = self.generate_criteria_from_chat(
             chat_input,
             dimensions,
@@ -494,10 +509,7 @@ class RubricGenerator:
             category_hints
         )
         
-        # Create and validate rubric
-        rubric = Rubric(dimensions=dimensions, criteria=criteria)
-        
-        return rubric
+        return Rubric(dimensions=dimensions, criteria=criteria)
     
     def _call_llm(self, prompt: str, **kwargs) -> Any:
         """
@@ -505,7 +517,7 @@ class RubricGenerator:
         
         Args:
             prompt: Prompt to send to LLM
-            **kwargs: Additional context passed to this method
+            **kwargs: Additional context passed to this method (currently unused)
             
         Returns:
             Parsed JSON response
@@ -539,37 +551,7 @@ class RubricGenerator:
             )
         
         content = response.choices[0].message.content.strip()
-        original_content = content  # Save for error reporting
+        json_content = _extract_json_from_response(content)
         
-        # Remove markdown code blocks if present
-        if content.startswith("```json"):
-            content = content[7:]
-        elif content.startswith("```"):
-            content = content[3:]
-        
-        if content.endswith("```"):
-            content = content[:-3]
-        
-        content = content.strip()
-        
-        # Try to parse JSON
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError as e:
-            # Try to repair common JSON issues
-            try:
-                repaired = repair_json(content)
-                return json.loads(repaired)
-            except json.JSONDecodeError:
-                # If repair also fails, provide detailed error message
-                error_lines = original_content.split('\n')
-                context_start = max(0, e.lineno - 3)
-                context_end = min(len(error_lines), e.lineno + 2)
-                context = '\n'.join(f"  {i+1:3d}| {line}" for i, line in enumerate(error_lines[context_start:context_end], start=context_start))
-                
-                raise ValueError(
-                    f"LLM returned invalid JSON. Error at line {e.lineno}, column {e.colno}: {e.msg}\n"
-                    f"Context:\n{context}\n\n"
-                    f"Full response:\n{original_content[:500]}{'...' if len(original_content) > 500 else ''}"
-                )
+        return _parse_json_response(json_content)
 
