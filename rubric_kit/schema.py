@@ -53,8 +53,12 @@ class ConsensusConfig(BaseModel):
     @model_validator(mode='after')
     def validate_threshold(self):
         """Validate threshold is provided for quorum mode."""
-        if self.mode == "quorum" and self.threshold is None:
+        if self.mode != "quorum":
+            return self
+        
+        if self.threshold is None:
             raise ValueError("threshold is required for quorum consensus mode")
+        
         return self
 
 
@@ -64,22 +68,34 @@ class JudgePanelConfig(BaseModel):
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     consensus: ConsensusConfig = Field(default_factory=ConsensusConfig)
     
+    def _calculate_threshold(self, num_judges: int) -> int:
+        """Calculate threshold based on consensus mode."""
+        if self.consensus.mode == "majority":
+            return (num_judges // 2) + 1
+        if self.consensus.mode == "unanimous":
+            return num_judges
+        return num_judges  # fallback (should not happen)
+    
     @model_validator(mode='after')
     def validate_consensus_threshold(self):
         """Validate consensus threshold against number of judges."""
+        num_judges = len(self.judges)
+        
         if self.consensus.mode == "quorum":
-            if self.consensus.threshold and self.consensus.threshold > len(self.judges):
-                raise ValueError(
-                    f"Consensus threshold ({self.consensus.threshold}) cannot exceed "
-                    f"number of judges ({len(self.judges)})"
-                )
-        elif self.consensus.mode == "majority":
-            # Auto-calculate threshold for majority
-            self.consensus.threshold = (len(self.judges) // 2) + 1
-        elif self.consensus.mode == "unanimous":
-            # Auto-set threshold to all judges
-            self.consensus.threshold = len(self.judges)
+            self._validate_quorum_threshold(num_judges)
+            return self
+        
+        # Auto-calculate threshold for majority and unanimous modes
+        self.consensus.threshold = self._calculate_threshold(num_judges)
         return self
+    
+    def _validate_quorum_threshold(self, num_judges: int) -> None:
+        """Validate quorum threshold does not exceed number of judges."""
+        if self.consensus.threshold and self.consensus.threshold > num_judges:
+            raise ValueError(
+                f"Consensus threshold ({self.consensus.threshold}) cannot exceed "
+                f"number of judges ({num_judges})"
+            )
 
 
 # ============================================================================
@@ -97,9 +113,14 @@ class ToolSpec(BaseModel):
     @model_validator(mode='after')
     def validate_calls(self):
         """Validate that min_calls <= max_calls if both are specified."""
-        if self.min_calls is not None and self.max_calls is not None:
-            if self.min_calls > self.max_calls:
-                raise ValueError(f"min_calls ({self.min_calls}) must be <= max_calls ({self.max_calls})")
+        if self.min_calls is None or self.max_calls is None:
+            return self
+        
+        if self.min_calls > self.max_calls:
+            raise ValueError(
+                f"min_calls ({self.min_calls}) must be <= max_calls ({self.max_calls})"
+            )
+        
         return self
 
 
@@ -125,11 +146,16 @@ class Dimension(BaseModel):
         if self.grading_type == "score" and not self.scores:
             raise ValueError("Dimension with grading_type 'score' must have scores defined")
         
-        if self.pass_above is not None:
-            if self.grading_type != "score":
-                raise ValueError("pass_above can only be used with grading_type 'score'")
-            if self.scores and self.pass_above not in self.scores:
-                raise ValueError(f"pass_above value {self.pass_above} must be a valid score in the scores dictionary")
+        if self.pass_above is None:
+            return self
+        
+        if self.grading_type != "score":
+            raise ValueError("pass_above can only be used with grading_type 'score'")
+        
+        if self.scores and self.pass_above not in self.scores:
+            raise ValueError(
+                f"pass_above value {self.pass_above} must be a valid score in the scores dictionary"
+            )
         
         return self
 
@@ -147,11 +173,15 @@ class Criterion(BaseModel):
     @classmethod
     def validate_weight(cls, v):
         """Validate that weight is in range 0-3 or 'from_scores'."""
-        if isinstance(v, int):
-            if v < 0 or v > 3:
-                raise ValueError(f"Weight must be between 0 and 3, got {v}")
-        elif v != "from_scores":
+        if v == "from_scores":
+            return v
+        
+        if not isinstance(v, int):
             raise ValueError(f"Weight must be an integer (0-3) or 'from_scores', got {v}")
+        
+        if v < 0 or v > 3:
+            raise ValueError(f"Weight must be between 0 and 3, got {v}")
+        
         return v
 
 
@@ -175,8 +205,5 @@ class Rubric(BaseModel):
 
     def get_dimension(self, name: str) -> Optional[Dimension]:
         """Get a dimension by name."""
-        for dimension in self.dimensions:
-            if dimension.name == name:
-                return dimension
-        return None
+        return next((d for d in self.dimensions if d.name == name), None)
 
