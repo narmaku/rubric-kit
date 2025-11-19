@@ -15,6 +15,8 @@ from rubric_kit.prompts import (
     build_dimension_generation_prompt,
     build_criteria_generation_prompt,
     build_refine_rubric_prompt,
+    build_refine_rubric_with_qa_prompt,
+    build_refine_rubric_with_chat_prompt,
     build_chat_dimension_generation_prompt,
     build_chat_criteria_generation_prompt,
 )
@@ -408,6 +410,69 @@ class RubricGenerator:
             dimensions=rubric.dimensions,
             criteria=rubric.criteria,
             feedback=feedback
+        )
+        response = self._call_llm(prompt)
+        
+        dimensions = _convert_to_dimensions(response["dimensions"])
+        criteria = _convert_to_criteria(response["criteria"])
+        
+        return Rubric(dimensions=dimensions, criteria=criteria)
+    
+    def refine_rubric_with_qa(
+        self,
+        rubric: Rubric,
+        qa_input: QAInput,
+        feedback: Optional[str] = None
+    ) -> Rubric:
+        """
+        Refine an existing rubric using Q&A context.
+        
+        Args:
+            rubric: Existing rubric to refine
+            qa_input: Q&A input to use as context for refinement
+            feedback: Optional specific feedback for refinement
+            
+        Returns:
+            Refined Rubric object
+        """
+        prompt = build_refine_rubric_with_qa_prompt(
+            dimensions=rubric.dimensions,
+            criteria=rubric.criteria,
+            question=qa_input.question,
+            answer=qa_input.answer,
+            feedback=feedback,
+            context=qa_input.context
+        )
+        response = self._call_llm(prompt)
+        
+        dimensions = _convert_to_dimensions(response["dimensions"])
+        criteria = _convert_to_criteria(response["criteria"])
+        
+        return Rubric(dimensions=dimensions, criteria=criteria)
+    
+    def refine_rubric_with_chat(
+        self,
+        rubric: Rubric,
+        chat_input: ChatSessionInput,
+        feedback: Optional[str] = None
+    ) -> Rubric:
+        """
+        Refine an existing rubric using chat session context.
+        
+        Args:
+            rubric: Existing rubric to refine
+            chat_input: Chat session input to use as context for refinement
+            feedback: Optional specific feedback for refinement
+            
+        Returns:
+            Refined Rubric object
+        """
+        prompt = build_refine_rubric_with_chat_prompt(
+            dimensions=rubric.dimensions,
+            criteria=rubric.criteria,
+            chat_content=chat_input.content,
+            feedback=feedback,
+            context=chat_input.context
         )
         response = self._call_llm(prompt)
         

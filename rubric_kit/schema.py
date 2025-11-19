@@ -14,6 +14,12 @@ class JudgeConfig(BaseModel):
     model: str = Field(..., description="Model name (e.g., gpt-4, claude-3-5-sonnet)")
     api_key: Optional[str] = Field(None, description="API key (null uses env var)")
     base_url: Optional[str] = Field(None, description="Custom API endpoint")
+    # Optional LLM inference parameters (if not provided, defaults from prompts.py are used)
+    temperature: Optional[float] = Field(None, ge=0.0, le=2.0, description="Temperature for inference (0.0-2.0)")
+    max_tokens: Optional[int] = Field(None, ge=1, description="Maximum tokens in response")
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0, description="Top-p sampling parameter (0.0-1.0)")
+    frequency_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0, description="Frequency penalty (-2.0 to 2.0)")
+    presence_penalty: Optional[float] = Field(None, ge=-2.0, le=2.0, description="Presence penalty (-2.0 to 2.0)")
 
 
 class ExecutionConfig(BaseModel):
@@ -108,7 +114,7 @@ class ToolSpec(BaseModel):
     name: str = Field(..., description="Name of the tool")
     min_calls: Optional[int] = Field(None, ge=0, description="Minimum number of calls")
     max_calls: Optional[int] = Field(None, ge=0, description="Maximum number of calls")
-    params: Dict = Field(default_factory=dict, description="Tool parameters")
+    params: Optional[Dict] = Field(None, description="Tool parameters. None=no validation, empty dict=check no params used, dict with values=check specified params")
 
     @model_validator(mode='after')
     def validate_calls(self):
@@ -130,6 +136,7 @@ class ToolCalls(BaseModel):
     required: List[ToolSpec] = Field(default_factory=list, description="Required tool calls")
     optional: List[ToolSpec] = Field(default_factory=list, description="Optional tool calls")
     prohibited: List[ToolSpec] = Field(default_factory=list, description="Prohibited tool calls")
+    params_strict_mode: bool = Field(False, description="If True, exactly the specified params must match. If False, extra params are ignored.")
 
 
 class Dimension(BaseModel):

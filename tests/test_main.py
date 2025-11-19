@@ -93,7 +93,7 @@ class TestEvaluateCommand:
         try:
             # Call main with evaluate subcommand
             import sys
-            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, sample_rubric_file, output_path]
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, '--rubric-file', sample_rubric_file, '--output-file', output_path]
             
             result = main()
             
@@ -121,7 +121,7 @@ class TestEvaluateCommand:
         
         # Ensure no API key in environment
         with patch.dict(os.environ, {}, clear=True):
-            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, sample_rubric_file, 'output.csv']
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, '--rubric-file', sample_rubric_file, '--output-file', 'output.csv']
             
             result = main()
             
@@ -134,7 +134,7 @@ class TestEvaluateCommand:
         import sys
         
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'}):
-            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', 'nonexistent.txt', 'nonexistent.yaml', 'output.csv']
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', 'nonexistent.txt', '--rubric-file', 'nonexistent.yaml', '--output-file', 'output.csv']
             
             result = main()
             
@@ -181,7 +181,7 @@ class TestGenerateCommand:
             output_path = f.name
         
         try:
-            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, output_path]
+            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, '--output-file', output_path]
             
             result = main()
             
@@ -232,7 +232,7 @@ class TestGenerateCommand:
         
         try:
             sys.argv = [
-                'rubric-kit', 'generate', '--from-qna', sample_qa_file, output_path,
+                'rubric-kit', 'generate', '--from-qna', sample_qa_file, '--output-file', output_path,
                 '--num-dimensions', '3',
                 '--num-criteria', '5',
                 '--categories', 'Output,Reasoning',
@@ -262,7 +262,7 @@ class TestGenerateCommand:
                 output_path = f.name
             
             try:
-                sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, output_path]
+                sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, '--output-file', output_path]
                 
                 result = main()
                 
@@ -307,7 +307,7 @@ class TestRefineCommand:
         )
         mock_generator.refine_rubric.return_value = mock_rubric
         
-        sys.argv = ['rubric-kit', 'refine', sample_rubric_file]
+        sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file]
         
         result = main()
         
@@ -348,7 +348,7 @@ class TestRefineCommand:
         mock_generator.refine_rubric.return_value = mock_rubric
         
         feedback = "Add more specific criteria"
-        sys.argv = ['rubric-kit', 'refine', sample_rubric_file, '--feedback', feedback]
+        sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, '--feedback', feedback]
         
         result = main()
         
@@ -392,7 +392,7 @@ class TestRefineCommand:
             output_path = f.name
         
         try:
-            sys.argv = ['rubric-kit', 'refine', sample_rubric_file, '--output', output_path]
+            sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, '--output-file', output_path]
             
             result = main()
             

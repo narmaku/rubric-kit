@@ -54,19 +54,22 @@ criteria:
     dimension: tool_usage
     tool_calls:
       respect_order: false
+      params_strict_mode: false  # If true, exactly the specified params must match (no extra params allowed)
       required:
         - get_system_information:
             min_calls: 1
             max_calls: 1
-            params: # If no params need to be checked, this can be omitted
+            params:  # Specify params to validate (omit entirely for no validation)
               hostname: 10.9.9.1
               username: root
         - get_cpu_information:
             min_calls: 1
             max_calls: 1
+            # params not specified = no validation (params can be anything or omitted)
         - get_memory_information:
             min_calls: 1
             max_calls: 1
+            params: {}  # Empty dict = explicitly check that tool was called with NO parameters
       optional:
         - get_network_interfaces:
             max_calls: 1

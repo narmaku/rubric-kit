@@ -178,7 +178,8 @@ def parse_tool_calls(tool_calls_data: Dict) -> ToolCalls:
         respect_order=tool_calls_data.get("respect_order", True),
         required=_parse_tool_specs(tool_calls_data.get("required")),
         optional=_parse_tool_specs(tool_calls_data.get("optional")),
-        prohibited=_parse_tool_specs(tool_calls_data.get("prohibited"))
+        prohibited=_parse_tool_specs(tool_calls_data.get("prohibited")),
+        params_strict_mode=tool_calls_data.get("params_strict_mode", False)
     )
 
 

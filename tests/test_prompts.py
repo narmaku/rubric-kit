@@ -489,3 +489,218 @@ def test_build_tool_call_evaluation_prompt_with_order_false():
     # Should still mention order consideration
     assert "order" in prompt.lower() or "sequence" in prompt.lower()
 
+
+def test_params_validation_none_no_check():
+    """Test that params=None means no parameter validation."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        required=[
+            ToolSpec(name="test_tool", min_calls=1, max_calls=1, params=None)
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # Should NOT include parameter checking instructions
+    assert "Check parameters" not in prompt
+    assert "Wrong or missing parameters" not in prompt
+    # Tool should be listed without param requirements
+    assert "test_tool" in prompt
+
+
+def test_params_validation_empty_dict_check_no_params():
+    """Test that params={} means check for NO parameters."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        required=[
+            ToolSpec(name="test_tool", min_calls=1, max_calls=1, params={})
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # Should include parameter checking instructions
+    assert "Check parameters" in prompt
+    # Should mention that tool must be called with NO parameters
+    assert "NO parameters" in prompt or "no parameters" in prompt.lower()
+    assert "test_tool" in prompt
+    # Should mention parameter failures
+    assert "Wrong or missing parameters" in prompt
+
+
+def test_params_validation_specified_params():
+    """Test that params with values means check specified parameters."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        required=[
+            ToolSpec(
+                name="test_tool",
+                min_calls=1,
+                max_calls=1,
+                params={"hostname": "example.com", "port": 8080}
+            )
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # Should include parameter checking instructions
+    assert "Check parameters" in prompt
+    # Should show the specified parameters
+    assert "hostname" in prompt
+    assert "example.com" in prompt
+    assert "port" in prompt
+    assert "8080" in prompt
+    # Should mention parameter failures
+    assert "Wrong or missing parameters" in prompt
+
+
+def test_params_strict_mode_false_allows_extra():
+    """Test that params_strict_mode=False allows extra parameters."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        params_strict_mode=False,
+        required=[
+            ToolSpec(
+                name="test_tool",
+                min_calls=1,
+                max_calls=1,
+                params={"hostname": "example.com"}
+            )
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # Should mention that extra parameters are OK
+    assert "Extra parameters are OK" in prompt or "extra parameters" in prompt.lower()
+    assert "STRICT MODE" not in prompt
+
+
+def test_params_strict_mode_true_requires_exact():
+    """Test that params_strict_mode=True requires exact parameter match."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        params_strict_mode=True,
+        required=[
+            ToolSpec(
+                name="test_tool",
+                min_calls=1,
+                max_calls=1,
+                params={"hostname": "example.com"}
+            )
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # Should mention strict mode
+    assert "STRICT MODE" in prompt
+    # Should mention that extra parameters are NOT allowed
+    assert "Extra parameters are NOT allowed" in prompt or "extra parameter" in prompt.lower()
+    assert "exactly the specified params" in prompt.lower()
+
+
+def test_params_mixed_validation_modes():
+    """Test mixing different params validation modes in one criterion."""
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    tool_calls = ToolCalls(
+        respect_order=False,
+        required=[
+            ToolSpec(name="tool_no_validation", min_calls=1, max_calls=1, params=None),
+            ToolSpec(name="tool_no_params", min_calls=1, max_calls=1, params={}),
+            ToolSpec(
+                name="tool_with_params",
+                min_calls=1,
+                max_calls=1,
+                params={"key": "value"}
+            )
+        ],
+        optional=[],
+        prohibited=[]
+    )
+    
+    criterion = Criterion(
+        name="tool_test",
+        category="Tools",
+        weight=3,
+        dimension="tool_usage",
+        tool_calls=tool_calls
+    )
+    
+    prompt = build_tool_call_evaluation_prompt(criterion, "content")
+    
+    # All tools should be mentioned
+    assert "tool_no_validation" in prompt
+    assert "tool_no_params" in prompt
+    assert "tool_with_params" in prompt
+    
+    # Should include parameter checking (because some tools have params requirements)
+    assert "Check parameters" in prompt
+    # Should mention NO parameters for tool_no_params
+    assert "NO parameters" in prompt or "no parameters" in prompt.lower()
+    # Should mention specified params for tool_with_params
+    assert "key" in prompt
+    assert "value" in prompt
+

@@ -413,3 +413,249 @@ def test_build_consensus_reason_score_agreement():
         "Outstanding work (from tertiary)"
     ]
     assert reason in possible_reasons
+
+
+# ============================================================================
+# LLM Parameter Tests
+# ============================================================================
+
+def test_judge_with_custom_temperature(simple_rubric, sample_chat_session_file):
+    """Test that judge-specific temperature is used when provided."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Create judge with custom temperature
+    panel = JudgePanelConfig(
+        judges=[JudgeConfig(
+            name="judge_1",
+            model="gpt-4",
+            api_key="test-key",
+            temperature=0.7  # Custom temperature
+        )],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
+    )
+    
+    # Mock the OpenAI client and capture the API call parameters
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel
+        )
+        
+        # Verify that the custom temperature was used
+        call_args = mock_client.chat.completions.create.call_args
+        assert call_args is not None
+        assert call_args.kwargs["temperature"] == 0.7
+
+
+def test_judge_with_default_temperature(simple_rubric, sample_chat_session_file):
+    """Test that default temperature is used when judge-specific temperature is not provided."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.prompts import EVALUATOR_CONFIG
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Create judge without custom temperature
+    panel = JudgePanelConfig(
+        judges=[JudgeConfig(
+            name="judge_1",
+            model="gpt-4",
+            api_key="test-key"
+            # No temperature specified
+        )],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
+    )
+    
+    # Mock the OpenAI client and capture the API call parameters
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel
+        )
+        
+        # Verify that the default temperature from EVALUATOR_CONFIG was used
+        call_args = mock_client.chat.completions.create.call_args
+        assert call_args is not None
+        assert call_args.kwargs["temperature"] == EVALUATOR_CONFIG.temperature
+
+
+def test_judge_with_custom_max_tokens(simple_rubric, sample_chat_session_file):
+    """Test that judge-specific max_tokens is used when provided."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Create judge with custom max_tokens
+    panel = JudgePanelConfig(
+        judges=[JudgeConfig(
+            name="judge_1",
+            model="gpt-4",
+            api_key="test-key",
+            max_tokens=4096  # Custom max_tokens
+        )],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
+    )
+    
+    # Mock the OpenAI client and capture the API call parameters
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel
+        )
+        
+        # Verify that the custom max_tokens was used
+        call_args = mock_client.chat.completions.create.call_args
+        assert call_args is not None
+        assert call_args.kwargs["max_tokens"] == 4096
+
+
+def test_judge_with_multiple_custom_parameters(simple_rubric, sample_chat_session_file):
+    """Test that multiple judge-specific parameters can be set together."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Create judge with multiple custom parameters
+    panel = JudgePanelConfig(
+        judges=[JudgeConfig(
+            name="judge_1",
+            model="gpt-4",
+            api_key="test-key",
+            temperature=0.5,
+            max_tokens=2048,
+            top_p=0.9,
+            frequency_penalty=0.1,
+            presence_penalty=0.2
+        )],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
+    )
+    
+    # Mock the OpenAI client and capture the API call parameters
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        mock_client.chat.completions.create.return_value = mock_response
+        mock_openai.return_value = mock_client
+        
+        evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel
+        )
+        
+        # Verify that all custom parameters were used
+        call_args = mock_client.chat.completions.create.call_args
+        assert call_args is not None
+        assert call_args.kwargs["temperature"] == 0.5
+        assert call_args.kwargs["max_tokens"] == 2048
+        assert call_args.kwargs["top_p"] == 0.9
+        assert call_args.kwargs["frequency_penalty"] == 0.1
+        assert call_args.kwargs["presence_penalty"] == 0.2
+
+
+def test_judge_panel_with_varied_parameters(simple_rubric, sample_chat_session_file):
+    """Test that different judges in a panel can have different parameters."""
+    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    
+    criterion = simple_rubric.criteria[0]
+    dimension = simple_rubric.get_dimension(criterion.dimension)
+    chat_content = open(sample_chat_session_file).read()
+    
+    # Create panel with judges having different parameters
+    panel = JudgePanelConfig(
+        judges=[
+            JudgeConfig(
+                name="judge_1",
+                model="gpt-4",
+                api_key="test-key-1",
+                temperature=0.0  # Deterministic judge
+            ),
+            JudgeConfig(
+                name="judge_2",
+                model="gpt-4",
+                api_key="test-key-2",
+                temperature=0.7,  # More creative judge
+                top_p=0.9
+            ),
+            JudgeConfig(
+                name="judge_3",
+                model="gpt-4",
+                api_key="test-key-3"
+                # Uses defaults
+            )
+        ],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="quorum", threshold=2)
+    )
+    
+    # Track API calls to verify each judge uses its own parameters
+    call_params = []
+    
+    def mock_create(*args, **kwargs):
+        call_params.append(kwargs.copy())
+        response = MagicMock()
+        response.choices = [MagicMock()]
+        response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
+        return response
+    
+    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = mock_create
+        mock_openai.return_value = mock_client
+        
+        evaluate_criterion_with_panel(
+            criterion=criterion,
+            chat_content=chat_content,
+            dimension=dimension,
+            panel_config=panel
+        )
+        
+        # Verify each judge used its own parameters
+        assert len(call_params) == 3
+        assert call_params[0]["temperature"] == 0.0  # Judge 1: custom temperature
+        assert call_params[1]["temperature"] == 0.7  # Judge 2: custom temperature
+        assert call_params[1]["top_p"] == 0.9  # Judge 2: custom top_p
+        # Judge 3 should use defaults (checked via EVALUATOR_CONFIG)

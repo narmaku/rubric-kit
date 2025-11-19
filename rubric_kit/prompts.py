@@ -94,8 +94,13 @@ def _format_tool_constraints(tool: ToolSpec) -> str:
 
 def _format_tool_params(tool: ToolSpec) -> str:
     """Format parameter requirements for a tool."""
-    if not tool.params:
+    if tool.params is None:
+        # No validation - don't show params
         return ""
+    if tool.params == {}:
+        # Explicitly check that no params were used
+        return " (must be called with NO parameters)"
+    # Show specified params
     params_list = [f"{k}: {v}" for k, v in tool.params.items()]
     return f" with parameters: {', '.join(params_list)}"
 
@@ -161,22 +166,51 @@ def _build_required_tool_lists(tool_calls: ToolCalls) -> Tuple[str, str, str, st
 
 
 def _build_param_check_instructions(tool_calls: ToolCalls) -> str:
-    """Build parameter checking instructions if any tools have params."""
-    has_params = any(tool.params for tool in tool_calls.required) if tool_calls.required else False
-    if not has_params:
+    """Build parameter checking instructions based on params specification.
+    
+    Logic:
+    - If params is None (not declared) → no validation, return empty string
+    - If params is {} (empty dict) → check that tool was called without params
+    - If params has values → check only specified params (ignore extra unless strict mode)
+    """
+    if not tool_calls.required:
         return ""
     
-    return """
-   
-   **Check parameters** (CRITICAL)
-   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values
-   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)
-   - Parameter names must match exactly (case-sensitive)
-   - Parameter values must match exactly (no partial matches, no "close enough")
-   - Missing parameters = FAIL
-   - Wrong parameter values = FAIL
-   - Extra parameters are OK (only required ones must match)
-   - If ANY required parameter is missing or wrong → FAIL"""
+    # Check if any tool has params validation requirements
+    tools_with_empty_params = [tool for tool in tool_calls.required if tool.params == {}]
+    tools_with_specified_params = [tool for tool in tool_calls.required if tool.params is not None and tool.params != {}]
+    
+    # If no tools have params validation requirements, return empty
+    if not tools_with_empty_params and not tools_with_specified_params:
+        return ""
+    
+    instructions = []
+    instructions.append("\n   **Check parameters** (CRITICAL)")
+    
+    # Handle tools that must be called with NO parameters
+    if tools_with_empty_params:
+        tool_names = [tool.name for tool in tools_with_empty_params]
+        instructions.append(f"   - The following tools MUST be called with NO parameters: {', '.join(tool_names)}")
+        instructions.append("   - If any of these tools were called WITH parameters → FAIL")
+    
+    # Handle tools with specified parameters
+    if tools_with_specified_params:
+        instructions.append("   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values")
+        instructions.append("   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)")
+        instructions.append("   - Parameter names must match exactly (case-sensitive)")
+        instructions.append("   - Parameter values must match exactly (no partial matches, no \"close enough\")")
+        instructions.append("   - Missing parameters = FAIL")
+        instructions.append("   - Wrong parameter values = FAIL")
+        
+        if tool_calls.params_strict_mode:
+            instructions.append("   - STRICT MODE: Extra parameters are NOT allowed - exactly the specified params must match")
+            instructions.append("   - If ANY extra parameter is present → FAIL")
+        else:
+            instructions.append("   - Extra parameters are OK (only required ones must match)")
+        
+        instructions.append("   - If ANY required parameter is missing or wrong → FAIL")
+    
+    return "\n".join(instructions)
 
 
 def _find_tool_call_parameters(
@@ -296,13 +330,12 @@ The specification requires these tools IN THIS EXACT ORDER:
 3. **Final result**
    - Order wrong → FAIL
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Wrong or missing parameters → FAIL
+   - Violated any limit → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Copy the exact tool identifier from the list above, such as "{first_tool_example}" or another tool from the list.]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Copy the exact tool identifier from the list above, such as "{first_tool_example}" or another tool from the list.]
 """
 
 
@@ -348,13 +381,12 @@ The specification requires these tools IN THIS EXACT ORDER:
 5. **Final result**
    - Order wrong → FAIL
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Wrong or missing parameters → FAIL
+   - Violated any limit → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Use the exact tool name, not a placeholder or the word "name".]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Use the exact tool name, not a placeholder or the word "name".]
 """
 
 
@@ -420,13 +452,12 @@ The specification requires these tools (ORDER DOESN'T MATTER):
 4. **Final result**
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
    - Violated any limit → FAIL
-   - Called prohibited tool → FAIL
-   - Wrong or missing parameters → FAIL
+   - Called prohibited tool → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
 """
 
 
@@ -466,13 +497,12 @@ The specification requires these tools (ORDER DOESN'T MATTER):
 5. **Final result**
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
    - Violated any limit → FAIL
-   - Called prohibited tool → FAIL
-   - Wrong or missing parameters → FAIL
+   - Called prohibited tool → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
 """
 
 
@@ -851,6 +881,37 @@ Return ONLY a JSON array of criterion objects. Example format:
 ]"""
 
 
+def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> Dict[str, Any]:
+    """Convert a criterion to dict format for YAML display, including tool_calls if present."""
+    crit_dict: Dict[str, Any] = {
+        "name": criterion.name,
+        "category": criterion.category,
+        "weight": criterion.weight,
+        "dimension": criterion.dimension,
+        "criterion": criterion.criterion
+    }
+    
+    if criterion.tool_calls:
+        required_list = [
+            {tc.name: {"min_calls": tc.min_calls, "max_calls": tc.max_calls, **({"params": tc.params} if tc.params else {})}}
+            for tc in criterion.tool_calls.required
+        ]
+        optional_list = [
+            {tc.name: {"min_calls": tc.min_calls, "max_calls": tc.max_calls, **({"params": tc.params} if tc.params else {})}}
+            for tc in criterion.tool_calls.optional
+        ]
+        prohibited_list = [tc.name for tc in criterion.tool_calls.prohibited]
+        
+        crit_dict["tool_calls"] = {
+            "respect_order": criterion.tool_calls.respect_order,
+            "required": required_list,
+            "optional": optional_list if optional_list else [],
+            "prohibited": prohibited_list if prohibited_list else []
+        }
+    
+    return crit_dict
+
+
 def build_refine_rubric_prompt(
     dimensions: List[Dimension],
     criteria: List[Criterion],
@@ -867,7 +928,7 @@ def build_refine_rubric_prompt(
     Returns:
         Formatted prompt string for the LLM
     """
-    # Convert to dict for YAML display
+    # Convert to dict for YAML display, preserving tool_calls
     rubric_dict = {
         "dimensions": [
             {
@@ -879,18 +940,15 @@ def build_refine_rubric_prompt(
             for d in dimensions
         ],
         "criteria": [
-            {
-                "name": c.name,
-                "category": c.category,
-                "weight": c.weight,
-                "dimension": c.dimension,
-                "criterion": c.criterion
-            }
+            _convert_criterion_to_dict_for_yaml(c)
             for c in criteria
         ]
     }
     
     rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
+    
+    # Check if any criteria have tool_calls
+    has_tool_calls = any(c.tool_calls for c in criteria)
     
     feedback_section = (
         f"\n\nSpecific Feedback:\n{feedback}"
@@ -904,10 +962,138 @@ def build_refine_rubric_prompt(
         )
     )
     
+    tool_calls_instruction = ""
+    if has_tool_calls:
+        tool_calls_instruction = "\n\n**CRITICAL - Tool Calls Specifications:**\n"
+        tool_calls_instruction += "- If a criterion in the current rubric has a 'tool_calls' specification, you MUST preserve it in the refined rubric\n"
+        tool_calls_instruction += "- Tool call specifications include: respect_order, required tools (with min_calls/max_calls), optional tools, and prohibited tools\n"
+        tool_calls_instruction += "- Only modify tool_calls if explicitly improving them, otherwise preserve them exactly as shown"
+    
     return f"""Refine the following evaluation rubric to improve its quality.
 
 Current Rubric:
-{rubric_yaml}{feedback_section}
+{rubric_yaml}{feedback_section}{tool_calls_instruction}
+
+Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
+
+**IMPORTANT - Tool Calls:**
+- If a criterion has a "tool_calls" specification in the current rubric, you MUST include it in the refined rubric
+- Tool call specifications are critical for evaluating tool usage and must be preserved
+- Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
+
+Return ONLY a JSON object with this format:
+{{
+  "dimensions": [
+    {{
+      "name": "dimension_name",
+      "description": "Clear description",
+      "grading_type": "binary",
+      "scores": {{"1": "desc", "2": "desc"}}
+    }}
+  ],
+  "criteria": [
+    {{
+      "name": "criterion_name",
+      "category": "Category",
+      "weight": 3,
+      "dimension": "dimension_name",
+      "criterion": "Specific criterion text",
+      "tool_calls": {{
+        "respect_order": true,
+        "required": [
+          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
+        ],
+        "optional": [],
+        "prohibited": []
+      }}
+    }}
+  ]
+}}
+
+Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
+
+
+def build_refine_rubric_with_qa_prompt(
+    dimensions: List[Dimension],
+    criteria: List[Criterion],
+    question: str,
+    answer: str,
+    feedback: Optional[str] = None,
+    context: Optional[str] = None
+) -> str:
+    """
+    Build a prompt for refining an existing rubric using Q&A context.
+    
+    Args:
+        dimensions: Current dimensions in the rubric
+        criteria: Current criteria in the rubric
+        question: The question from the Q&A pair
+        answer: The answer from the Q&A pair
+        feedback: Optional specific feedback for refinement
+        context: Optional additional context
+        
+    Returns:
+        Formatted prompt string for the LLM
+    """
+    # Convert to dict for YAML display, preserving tool_calls
+    rubric_dict = {
+        "dimensions": [
+            {
+                "name": d.name,
+                "description": d.description,
+                "grading_type": d.grading_type,
+                **({"scores": d.scores} if d.scores else {})
+            }
+            for d in dimensions
+        ],
+        "criteria": [
+            _convert_criterion_to_dict_for_yaml(c)
+            for c in criteria
+        ]
+    }
+    
+    rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
+    context_info = f"\n\nAdditional Context: {context}" if context else ""
+    
+    # Check if any criteria have tool_calls
+    has_tool_calls = any(c.tool_calls for c in criteria)
+    
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}"
+        if feedback
+        else (
+            "\n\nPlease improve the rubric by:\n"
+            "- Making criteria more specific and measurable based on the Q&A pair\n"
+            "- Improving descriptions for clarity\n"
+            "- Ensuring proper weight distribution\n"
+            "- Adding detail where criteria are too vague\n"
+            "- Ensuring criteria accurately reflect what should be evaluated in the answer"
+        )
+    )
+    
+    tool_calls_instruction = ""
+    if has_tool_calls:
+        tool_calls_instruction = "\n\n**CRITICAL - Tool Calls Specifications:**\n"
+        tool_calls_instruction += "- If a criterion in the current rubric has a 'tool_calls' specification, you MUST preserve it in the refined rubric\n"
+        tool_calls_instruction += "- Tool call specifications include: respect_order, required tools (with min_calls/max_calls), optional tools, and prohibited tools\n"
+        tool_calls_instruction += "- Only modify tool_calls if explicitly improving them, otherwise preserve them exactly as shown"
+    
+    return f"""Refine the following evaluation rubric to improve its quality, using the Q&A pair as context.
+
+**Q&A Pair:**
+Question: {question}
+Answer: {answer}{context_info}
+
+**Current Rubric:**
+{rubric_yaml}{feedback_section}{tool_calls_instruction}
+
+Analyze the Q&A pair and refine the rubric to better evaluate answers like the one provided. Ensure criteria are specific and measurable based on the actual content.
+
+**IMPORTANT - Tool Calls:**
+- If a criterion has a "tool_calls" specification in the current rubric, you MUST include it in the refined rubric
+- Tool call specifications are critical for evaluating tool usage and must be preserved
+- If the answer mentions tool usage and a criterion evaluates tools, ensure it has a proper tool_calls specification
+- Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
 
 Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
 
@@ -927,10 +1113,138 @@ Return ONLY a JSON object with this format:
       "category": "Category",
       "weight": 3,
       "dimension": "dimension_name",
-      "criterion": "Specific criterion text"
+      "criterion": "Specific criterion text",
+      "tool_calls": {{
+        "respect_order": true,
+        "required": [
+          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
+        ],
+        "optional": [],
+        "prohibited": []
+      }}
     }}
   ]
-}}"""
+}}
+
+Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
+
+
+def build_refine_rubric_with_chat_prompt(
+    dimensions: List[Dimension],
+    criteria: List[Criterion],
+    chat_content: str,
+    feedback: Optional[str] = None,
+    context: Optional[str] = None
+) -> str:
+    """
+    Build a prompt for refining an existing rubric using chat session context.
+    
+    Args:
+        dimensions: Current dimensions in the rubric
+        criteria: Current criteria in the rubric
+        chat_content: The chat session content
+        feedback: Optional specific feedback for refinement
+        context: Optional additional context
+        
+    Returns:
+        Formatted prompt string for the LLM
+    """
+    # Convert to dict for YAML display, preserving tool_calls
+    rubric_dict = {
+        "dimensions": [
+            {
+                "name": d.name,
+                "description": d.description,
+                "grading_type": d.grading_type,
+                **({"scores": d.scores} if d.scores else {})
+            }
+            for d in dimensions
+        ],
+        "criteria": [
+            _convert_criterion_to_dict_for_yaml(c)
+            for c in criteria
+        ]
+    }
+    
+    rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
+    context_info = f"\n\nAdditional Context: {context}" if context else ""
+    
+    # Check if any criteria have tool_calls
+    has_tool_calls = any(c.tool_calls for c in criteria)
+    
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}"
+        if feedback
+        else (
+            "\n\nPlease improve the rubric by:\n"
+            "- Making criteria more specific and measurable based on the chat session\n"
+            "- Improving descriptions for clarity\n"
+            "- Ensuring proper weight distribution\n"
+            "- Adding detail where criteria are too vague\n"
+            "- Ensuring criteria accurately reflect tool usage, output quality, and other aspects shown in the chat"
+        )
+    )
+    
+    tool_calls_instruction = ""
+    if has_tool_calls:
+        tool_calls_instruction = "\n\n**CRITICAL - Tool Calls Specifications:**\n"
+        tool_calls_instruction += "- If a criterion in the current rubric has a 'tool_calls' specification, you MUST preserve it in the refined rubric\n"
+        tool_calls_instruction += "- Tool call specifications include: respect_order, required tools (with min_calls/max_calls), optional tools, and prohibited tools\n"
+        tool_calls_instruction += "- Only modify tool_calls if explicitly improving them, otherwise preserve them exactly as shown"
+    
+    return f"""Refine the following evaluation rubric to improve its quality, using the chat session as context.
+
+**Chat Session:**
+{chat_content}{context_info}
+
+**Current Rubric:**
+{rubric_yaml}{feedback_section}{tool_calls_instruction}
+
+Analyze the chat session and refine the rubric to better evaluate similar interactions. Consider tool usage, output accuracy, completeness, and other relevant aspects shown in the chat.
+
+**IMPORTANT - Tool Calls:**
+- If a criterion has a "tool_calls" specification in the current rubric, you MUST include it in the refined rubric
+- Tool call specifications are critical for evaluating tool usage and must be preserved
+- If the chat session shows tool calls and a criterion evaluates tool usage, ensure it has a proper tool_calls specification
+- The tool_calls specification should include:
+  * respect_order: true/false (whether tool call order matters)
+  * required: List of required tools (extract from chat session) with min_calls and max_calls
+  * optional: List of optional tools that can be called
+  * prohibited: List of tools that should not be called
+- Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
+
+Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
+
+Return ONLY a JSON object with this format:
+{{
+  "dimensions": [
+    {{
+      "name": "dimension_name",
+      "description": "Clear description",
+      "grading_type": "binary",
+      "scores": {{"1": "desc", "2": "desc"}}
+    }}
+  ],
+  "criteria": [
+    {{
+      "name": "criterion_name",
+      "category": "Category",
+      "weight": 3,
+      "dimension": "dimension_name",
+      "criterion": "Specific criterion text",
+      "tool_calls": {{
+        "respect_order": true,
+        "required": [
+          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
+        ],
+        "optional": [],
+        "prohibited": []
+      }}
+    }}
+  ]
+}}
+
+Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
 
 
 def build_chat_dimension_generation_prompt(

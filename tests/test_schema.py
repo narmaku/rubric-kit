@@ -459,6 +459,60 @@ def test_judge_panel_config_requires_at_least_one_judge():
         JudgePanelConfig(judges=[])  # Empty judges list
 
 
+def test_judge_config_with_llm_parameters():
+    """Test that JudgeConfig accepts optional LLM parameters."""
+    from rubric_kit.schema import JudgeConfig
+    
+    judge = JudgeConfig(
+        name="test_judge",
+        model="gpt-4",
+        temperature=0.7,
+        max_tokens=4096,
+        top_p=0.9,
+        frequency_penalty=0.1,
+        presence_penalty=0.2
+    )
+    
+    assert judge.temperature == 0.7
+    assert judge.max_tokens == 4096
+    assert judge.top_p == 0.9
+    assert judge.frequency_penalty == 0.1
+    assert judge.presence_penalty == 0.2
+
+
+def test_judge_config_without_llm_parameters():
+    """Test that JudgeConfig works without LLM parameters (uses defaults)."""
+    from rubric_kit.schema import JudgeConfig
+    
+    judge = JudgeConfig(
+        name="test_judge",
+        model="gpt-4"
+    )
+    
+    assert judge.temperature is None
+    assert judge.max_tokens is None
+    assert judge.top_p is None
+    assert judge.frequency_penalty is None
+    assert judge.presence_penalty is None
+
+
+def test_judge_config_validates_temperature_range():
+    """Test that temperature must be in valid range."""
+    from rubric_kit.schema import JudgeConfig
+    
+    # Valid temperature
+    judge = JudgeConfig(name="test", model="gpt-4", temperature=1.5)
+    assert judge.temperature == 1.5
+    
+    # Invalid: too high
+    with pytest.raises(ValidationError):
+        JudgeConfig(name="test", model="gpt-4", temperature=3.0)
+    
+    # Invalid: negative
+    with pytest.raises(ValidationError):
+        JudgeConfig(name="test", model="gpt-4", temperature=-0.1)
+
+
 def test_judge_panel_config_validates_quorum_threshold():
     """Test that quorum threshold cannot exceed number of judges."""
     from rubric_kit.schema import JudgePanelConfig, JudgeConfig, ConsensusConfig

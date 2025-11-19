@@ -184,17 +184,33 @@ def _call_llm(
     prompt: str,
     config: Any
 ) -> str:
-    """Call LLM API and return response content."""
+    """Call LLM API and return response content.
+    
+    Uses judge-specific LLM parameters if provided, otherwise falls back to
+    defaults from the config object (from prompts.py).
+    """
+    # Build API call parameters, using judge-specific values if provided,
+    # otherwise falling back to config defaults
+    api_params = {
+        "model": judge_config.model,
+        "messages": [
+            {"role": "system", "content": config.system_prompt},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": judge_config.temperature if judge_config.temperature is not None else config.temperature,
+        "max_tokens": judge_config.max_tokens if judge_config.max_tokens is not None else config.max_tokens
+    }
+    
+    # Add optional parameters if provided in judge config
+    if judge_config.top_p is not None:
+        api_params["top_p"] = judge_config.top_p
+    if judge_config.frequency_penalty is not None:
+        api_params["frequency_penalty"] = judge_config.frequency_penalty
+    if judge_config.presence_penalty is not None:
+        api_params["presence_penalty"] = judge_config.presence_penalty
+    
     try:
-        response = client.chat.completions.create(
-            model=judge_config.model,
-            messages=[
-                {"role": "system", "content": config.system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=config.temperature,
-            max_tokens=config.max_tokens
-        )
+        response = client.chat.completions.create(**api_params)
     except Exception as e:
         raise ValueError(
             f"Judge evaluation failed: API call error for {judge_config.model}: {str(e)}"

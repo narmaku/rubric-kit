@@ -232,18 +232,20 @@ criteria:
     dimension: tool_usage
     tool_calls:
       respect_order: true  # Whether tool call order matters
+      params_strict_mode: false  # If true, exactly specified params must match
       required:
         - get_system_information:
           min_calls: 1
           max_calls: 1
-          params:
+          params:  # Omit for no validation, {} for no params, {key: value} for specific params
+            hostname: example.com
       optional:
         - get_network_interfaces:
           max_calls: 1
-          params:
+          # params omitted = no validation
       prohibited:
         - get_weather:
-          params:
+          # params omitted = no validation
 ```
 
 ## Chat Session File Format
@@ -379,15 +381,42 @@ Criteria define specific evaluation rules:
 For criteria that evaluate tool usage, rubric-kit provides **specialized tool call evaluation** with structured parsing:
 
 - **respect_order**: Whether order matters (default: true)
+- **params_strict_mode**: If true, exactly the specified params must match (no extra params allowed). Default: false
 - **required**: List of required tool calls with min/max constraints
 - **optional**: List of optional tool calls
 - **prohibited**: List of prohibited tool calls
+
+**Parameter Validation:**
+
+The `params` field for each tool specification controls parameter validation:
+
+- **`params` omitted/not declared**: No parameter validation - tool can be called with any parameters or none
+- **`params: {}`** (empty dict): Explicitly check that the tool was called with **NO parameters** (fails if any params were used)
+- **`params: {key: value}`**: Check that the specified parameters match exactly. Extra parameters are ignored unless `params_strict_mode: true`
+
+**Examples:**
+
+```yaml
+tool_calls:
+  respect_order: false
+  params_strict_mode: false  # Allow extra params (default)
+  required:
+    - tool_with_params:
+        params:
+          hostname: example.com
+          port: 8080
+    - tool_no_params:
+        params: {}  # Must be called with NO parameters
+    - tool_any_params:
+        # params not specified = no validation
+```
 
 **Tool Call Evaluation Features:**
 - Automatically parses tool calls from chat sessions (handles various formats)
 - Counts tool call occurrences and verifies min/max constraints
 - Checks tool call order when `respect_order: true`
 - Validates that all required tools were called
+- Validates tool call parameters based on specification
 - Ensures no prohibited tools were used
 - Uses a dedicated prompt template optimized for structured parsing
 

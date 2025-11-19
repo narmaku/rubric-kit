@@ -87,7 +87,8 @@ def convert_tool_spec_to_dict(tool_spec: ToolSpec) -> Dict[str, Any]:
         tool_dict["min_calls"] = tool_spec.min_calls
     if tool_spec.max_calls is not None:
         tool_dict["max_calls"] = tool_spec.max_calls
-    if tool_spec.params:
+    # Preserve params distinction: None (not declared) vs {} (empty dict)
+    if tool_spec.params is not None:
         tool_dict["params"] = tool_spec.params
     return tool_dict if tool_dict else None
 
@@ -125,6 +126,9 @@ def convert_criterion_to_dict(criterion: Criterion) -> Dict[str, Any]:
         "optional": optional_list if optional_list else [],
         "prohibited": prohibited_list if prohibited_list else []
     }
+    # Only include params_strict_mode if it's True (default is False)
+    if criterion.tool_calls.params_strict_mode:
+        crit_dict["tool_calls"]["params_strict_mode"] = True
     
     return crit_dict
 
@@ -229,8 +233,8 @@ def cmd_evaluate(args) -> int:
         Exit code (0 for success, non-zero for error)
     """
     # Load rubric
-    print(f"Loading rubric from {args.rubric_yaml}...")
-    rubric = load_rubric(args.rubric_yaml)
+    print(f"Loading rubric from {args.rubric_file}...")
+    rubric = load_rubric(args.rubric_file)
     print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
     
     # Load or create judge panel configuration
@@ -350,8 +354,8 @@ def cmd_generate(args) -> int:
     print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
     
     # Write rubric to file
-    print(f"\nWriting rubric to {args.output_yaml}...")
-    write_rubric_to_file(rubric, args.output_yaml)
+    print(f"\nWriting rubric to {args.output_file}...")
+    write_rubric_to_file(rubric, args.output_file)
     print(f"✓ Rubric written successfully")
     
     # Print summary
@@ -372,8 +376,8 @@ def cmd_refine(args) -> int:
         Exit code (0 for success, non-zero for error)
     """
     # Load existing rubric
-    print(f"Loading rubric from {args.rubric_yaml}...")
-    rubric = load_rubric(args.rubric_yaml)
+    print(f"Loading rubric from {args.rubric_file}...")
+    rubric = load_rubric(args.rubric_file)
     print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
     
     # Initialize generator
@@ -381,22 +385,53 @@ def cmd_refine(args) -> int:
     print(f"   Model: {args.model}")
     generator = create_generator(args)
     
+    # Parse input based on type (if provided)
+    input_type = None
+    input_obj = None
+    
+    if args.qna_file:
+        print(f"\nLoading Q&A from {args.qna_file}...")
+        input_obj = parse_qa_input(args.qna_file)
+        print(f"✓ Loaded Q&A pair")
+        print(f"   Q: {input_obj.question[:80]}{'...' if len(input_obj.question) > 80 else ''}")
+        input_type = "qa"
+    elif args.chat_session_file:
+        print(f"\nLoading chat session from {args.chat_session_file}...")
+        input_obj = parse_chat_session(args.chat_session_file)
+        print(f"✓ Loaded chat session")
+        print(f"   Content length: {len(input_obj.content)} characters")
+        input_type = "chat"
+    
     # Refine rubric
     feedback_msg = f" with feedback" if args.feedback else ""
-    print(f"\n🔄 Refining rubric{feedback_msg}...")
+    context_msg = f" using {input_type} context" if input_type else ""
+    print(f"\n🔄 Refining rubric{context_msg}{feedback_msg}...")
     if args.feedback:
         print(f"   Feedback: {args.feedback}")
     print("   This may take a moment...")
     
-    refined_rubric = generator.refine_rubric(
-        rubric,
-        feedback=args.feedback
-    )
+    if input_type == "qa":
+        refined_rubric = generator.refine_rubric_with_qa(
+            rubric,
+            input_obj,
+            feedback=args.feedback
+        )
+    elif input_type == "chat":
+        refined_rubric = generator.refine_rubric_with_chat(
+            rubric,
+            input_obj,
+            feedback=args.feedback
+        )
+    else:
+        refined_rubric = generator.refine_rubric(
+            rubric,
+            feedback=args.feedback
+        )
     
     print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
     
     # Determine output path and write
-    output_path = args.output if args.output else args.rubric_yaml
+    output_path = args.output_file if args.output_file else args.rubric_file
     print(f"\nWriting refined rubric to {output_path}...")
     write_rubric_to_file(refined_rubric, output_path)
     print(f"✓ Refined rubric written successfully")
@@ -435,16 +470,16 @@ def main() -> int:
         epilog="""
 Examples:
   # Evaluate from Q&A YAML file
-  %(prog)s --from-qna qna.yaml rubric.yaml results.csv
+  %(prog)s --from-qna qna.yaml --rubric-file rubric.yaml --output-file results.csv
   
   # Evaluate from chat session file
-  %(prog)s --from-chat-session chat_session.txt rubric.yaml results.csv
+  %(prog)s --from-chat-session chat_session.txt --rubric-file rubric.yaml --output-file results.csv
   
   # With custom model
-  %(prog)s --from-chat-session chat.txt rubric.yaml output.csv --model gpt-4-turbo
+  %(prog)s --from-chat-session chat.txt --rubric-file rubric.yaml --output-file output.csv --model gpt-4-turbo
   
   # With custom OpenAI-compatible endpoint
-  %(prog)s --from-chat-session chat.txt rubric.yaml output.csv --base-url https://api.example.com/v1
+  %(prog)s --from-chat-session chat.txt --rubric-file rubric.yaml --output-file output.csv --base-url https://api.example.com/v1
 """
     )
     
@@ -462,12 +497,14 @@ Examples:
     )
     
     evaluate_parser.add_argument(
-        'rubric_yaml',
+        '--rubric-file',
+        required=True,
         help='Path to rubric YAML file'
     )
     
     evaluate_parser.add_argument(
-        'output_file',
+        '--output-file',
+        required=True,
         help='Path to output file (CSV, JSON, or YAML). Format is auto-detected from extension (.csv, .json, .yaml, .yml)'
     )
     
@@ -520,16 +557,16 @@ Examples:
         epilog="""
 Examples:
   # Generate from Q&A YAML file
-  %(prog)s --from-qna qna.yaml output_rubric.yaml
+  %(prog)s --from-qna qna.yaml --output-file output_rubric.yaml
   
   # Generate from chat session file
-  %(prog)s --from-chat-session session.txt output_rubric.yaml
+  %(prog)s --from-chat-session session.txt --output-file output_rubric.yaml
   
   # With custom parameters
-  %(prog)s --from-qna qna.yaml rubric.yaml --num-dimensions 5 --num-criteria 8
+  %(prog)s --from-qna qna.yaml --output-file rubric.yaml --num-dimensions 5 --num-criteria 8
   
   # With category hints
-  %(prog)s --from-chat-session session.txt rubric.yaml --categories "Tools,Output,Reasoning"
+  %(prog)s --from-chat-session session.txt --output-file rubric.yaml --categories "Tools,Output,Reasoning"
 """
     )
     
@@ -547,7 +584,8 @@ Examples:
     )
     
     generate_parser.add_argument(
-        'output_yaml',
+        '--output-file',
+        required=True,
         help='Path to output rubric YAML file'
     )
     
@@ -596,29 +634,49 @@ Examples:
         epilog="""
 Examples:
   # Basic usage (overwrites original)
-  %(prog)s rubric.yaml
+  %(prog)s --rubric-file rubric.yaml
   
   # With feedback
-  %(prog)s rubric.yaml --feedback "Add more specific criteria"
+  %(prog)s --rubric-file rubric.yaml --feedback "Add more specific criteria"
   
   # With custom output path
-  %(prog)s rubric.yaml --output refined_rubric.yaml
+  %(prog)s --rubric-file rubric.yaml --output-file refined_rubric.yaml
+  
+  # Refine using Q&A context
+  %(prog)s --rubric-file rubric.yaml --from-qna qna.yaml --output-file refined.yaml
+  
+  # Refine using chat session context
+  %(prog)s --rubric-file rubric.yaml --from-chat-session session.txt --output-file refined.yaml
 """
     )
     
     refine_parser.add_argument(
-        'rubric_yaml',
+        '--rubric-file',
+        required=True,
         help='Path to existing rubric YAML file'
+    )
+    
+    # Mutually exclusive input format options (optional for refine)
+    refine_input_group = refine_parser.add_mutually_exclusive_group(required=False)
+    refine_input_group.add_argument(
+        '--from-qna',
+        dest='qna_file',
+        help='Path to Q&A YAML file to use as context for refinement (optional)'
+    )
+    refine_input_group.add_argument(
+        '--from-chat-session',
+        dest='chat_session_file',
+        help='Path to chat session file to use as context for refinement (optional)'
+    )
+    
+    refine_parser.add_argument(
+        '--output-file',
+        help='Output path for refined rubric (default: overwrite original)'
     )
     
     refine_parser.add_argument(
         '--feedback',
         help='Specific feedback for refinement (optional)'
-    )
-    
-    refine_parser.add_argument(
-        '--output',
-        help='Output path for refined rubric (default: overwrite original)'
     )
     
     refine_parser.add_argument(
