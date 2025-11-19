@@ -4,17 +4,220 @@ import argparse
 import sys
 import os
 import yaml
+import traceback
+from functools import wraps
+from typing import Callable, Dict, Any, Optional, Tuple
 
 from rubric_kit.validator import load_rubric, load_judge_panel_config, RubricValidationError
 from rubric_kit.processor import evaluate_rubric, calculate_total_score, calculate_percentage_score
-from rubric_kit.output import write_results, print_table
+from rubric_kit.output import write_results, print_table, detect_format_from_extension
 from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
 from rubric_kit.generator import RubricGenerator, parse_qa_input, parse_chat_session
-from rubric_kit.schema import JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
+from rubric_kit.schema import (
+    JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig,
+    Rubric, Dimension, Criterion, ToolSpec
+)
 
 
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def handle_command_errors(func: Callable) -> Callable:
+    """Decorator to handle common errors for command functions."""
+    @wraps(func)
+    def wrapper(args) -> int:
+        try:
+            return func(args)
+        except FileNotFoundError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except RubricValidationError as e:
+            print(f"Rubric validation error: {e}", file=sys.stderr)
+            return 1
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        except Exception as e:
+            print(f"Unexpected error: {e}", file=sys.stderr)
+            traceback.print_exc()
+            return 1
+    return wrapper
 
 
+def get_api_key(args_api_key: Optional[str]) -> str:
+    """Get API key from args or environment variable."""
+    api_key = args_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "API key required. Set OPENAI_API_KEY environment variable or use --api-key"
+        )
+    return api_key
+
+
+def create_default_panel_config(args) -> JudgePanelConfig:
+    """Create a default single-judge panel configuration."""
+    api_key = get_api_key(args.api_key)
+    return JudgePanelConfig(
+        judges=[JudgeConfig(
+            name="default",
+            model=args.model,
+            api_key=api_key,
+            base_url=args.base_url
+        )],
+        execution=ExecutionConfig(mode="sequential"),
+        consensus=ConsensusConfig(mode="unanimous")
+    )
+
+
+def create_generator(args) -> RubricGenerator:
+    """Create and return a RubricGenerator instance."""
+    api_key = get_api_key(args.api_key)
+    return RubricGenerator(
+        api_key=api_key,
+        model=args.model,
+        base_url=args.base_url
+    )
+
+
+def convert_tool_spec_to_dict(tool_spec: ToolSpec) -> Dict[str, Any]:
+    """Convert a ToolSpec to dictionary format."""
+    tool_dict: Dict[str, Any] = {}
+    if tool_spec.min_calls is not None:
+        tool_dict["min_calls"] = tool_spec.min_calls
+    if tool_spec.max_calls is not None:
+        tool_dict["max_calls"] = tool_spec.max_calls
+    if tool_spec.params:
+        tool_dict["params"] = tool_spec.params
+    return tool_dict if tool_dict else None
+
+
+def convert_criterion_to_dict(criterion: Criterion) -> Dict[str, Any]:
+    """Convert a Criterion to dictionary format."""
+    crit_dict: Dict[str, Any] = {
+        "category": criterion.category,
+        "weight": criterion.weight,
+        "dimension": criterion.dimension,
+        "criterion": criterion.criterion
+    }
+    
+    if not criterion.tool_calls:
+        return crit_dict
+    
+    required_list = [
+        {tc.name: convert_tool_spec_to_dict(tc)}
+        for tc in criterion.tool_calls.required
+    ]
+    
+    optional_list = [
+        {tc.name: convert_tool_spec_to_dict(tc)}
+        for tc in criterion.tool_calls.optional
+    ]
+    
+    prohibited_list = [
+        {tc.name: None}
+        for tc in criterion.tool_calls.prohibited
+    ]
+    
+    crit_dict["tool_calls"] = {
+        "respect_order": criterion.tool_calls.respect_order,
+        "required": required_list,
+        "optional": optional_list if optional_list else [],
+        "prohibited": prohibited_list if prohibited_list else []
+    }
+    
+    return crit_dict
+
+
+def convert_rubric_to_yaml_dict(rubric: Rubric) -> Dict[str, Any]:
+    """Convert a Rubric object to YAML dictionary format."""
+    rubric_dict: Dict[str, Any] = {"dimensions": []}
+    
+    for dim in rubric.dimensions:
+        dim_dict: Dict[str, Any] = {
+            dim.name: dim.description,
+            "grading_type": dim.grading_type
+        }
+        if dim.scores:
+            dim_dict["scores"] = dim.scores
+        rubric_dict["dimensions"].append(dim_dict)
+    
+    rubric_dict["criteria"] = {
+        criterion.name: convert_criterion_to_dict(criterion)
+        for criterion in rubric.criteria
+    }
+    
+    return rubric_dict
+
+
+def write_rubric_to_file(rubric: Rubric, output_path: str) -> None:
+    """Write a rubric to a YAML file."""
+    rubric_dict = convert_rubric_to_yaml_dict(rubric)
+    with open(output_path, 'w') as f:
+        yaml.dump(
+            rubric_dict,
+            f,
+            sort_keys=False,
+            default_flow_style=False,
+            allow_unicode=True
+        )
+
+
+def print_rubric_summary(rubric: Rubric, title: str) -> None:
+    """Print a summary of the rubric."""
+    print("\n" + "=" * 80)
+    print(title)
+    print("=" * 80)
+    print(f"\nDimensions ({len(rubric.dimensions)}):")
+    for dim in rubric.dimensions:
+        print(f"  • {dim.name} ({dim.grading_type})")
+    
+    print(f"\nCriteria ({len(rubric.criteria)}):")
+    for crit in rubric.criteria:
+        print(f"  • {crit.name} [{crit.category}] - {crit.dimension}")
+    print()
+
+
+def print_evaluation_config(panel_config: JudgePanelConfig) -> None:
+    """Print evaluation configuration details."""
+    print(f"   Execution mode: {panel_config.execution.mode}")
+    print(f"   Consensus mode: {panel_config.consensus.mode}")
+    if panel_config.consensus.mode in ("quorum", "majority"):
+        print(f"   Consensus threshold: {panel_config.consensus.threshold}")
+
+
+def get_output_format(args, output_file: str) -> str:
+    """Determine output format from args or file extension."""
+    if hasattr(args, 'format') and args.format:
+        return args.format
+    return detect_format_from_extension(output_file)
+
+
+def parse_dimension_criteria_counts(args) -> Tuple[Optional[int], Optional[int]]:
+    """Parse dimension and criteria counts, supporting 'auto' keyword."""
+    num_dimensions = None if args.num_dimensions == "auto" else int(args.num_dimensions)
+    num_criteria = None if args.num_criteria == "auto" else int(args.num_criteria)
+    return num_dimensions, num_criteria
+
+
+def print_generation_progress(num_dimensions: Optional[int], num_criteria: Optional[int]) -> None:
+    """Print progress message for rubric generation."""
+    if num_dimensions is None and num_criteria is None:
+        print("\n🔄 Generating rubric with auto-detected dimensions and criteria...")
+    elif num_dimensions is None:
+        print(f"\n🔄 Generating rubric with auto-detected dimensions and {num_criteria} criteria...")
+    elif num_criteria is None:
+        print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and auto-detected criteria...")
+    else:
+        print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and {num_criteria} criteria...")
+    print("   This may take a moment...")
+
+
+# ============================================================================
+# Command Functions
+# ============================================================================
+
+@handle_command_errors
 def cmd_evaluate(args) -> int:
     """
     Execute the 'evaluate' subcommand.
@@ -25,110 +228,68 @@ def cmd_evaluate(args) -> int:
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    try:
-        # Load rubric
-        print(f"Loading rubric from {args.rubric_yaml}...")
-        rubric = load_rubric(args.rubric_yaml)
-        print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
-        
-        # Load or create judge panel configuration
-        if args.judge_panel_config:
-            print(f"\nLoading judge panel configuration from {args.judge_panel_config}...")
-            panel_config = load_judge_panel_config(args.judge_panel_config)
-            print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
-        else:
-            # Create default single-judge panel
-            api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
-                return 1
-            
-            panel_config = JudgePanelConfig(
-                judges=[JudgeConfig(
-                    name="default",
-                    model=args.model,
-                    api_key=api_key,
-                    base_url=args.base_url
-                )],
-                execution=ExecutionConfig(mode="sequential"),
-                consensus=ConsensusConfig(mode="unanimous")
-            )
-            print(f"\n🤖 Using single judge: {args.model}")
-        
-        # Determine input type and evaluate
-        if args.qna_file:
-            print(f"\nEvaluating Q&A from {args.qna_file}...")
-            print(f"   Execution mode: {panel_config.execution.mode}")
-            print(f"   Consensus mode: {panel_config.consensus.mode}")
-            if panel_config.consensus.mode in ("quorum", "majority"):
-                print(f"   Consensus threshold: {panel_config.consensus.threshold}")
-            
-            evaluations = evaluate_rubric_with_panel_from_qa(
-                rubric,
-                args.qna_file,
-                panel_config
-            )
-        else:
-            print(f"\nEvaluating chat session from {args.chat_session_file}...")
-            print(f"   Execution mode: {panel_config.execution.mode}")
-            print(f"   Consensus mode: {panel_config.consensus.mode}")
-            if panel_config.consensus.mode in ("quorum", "majority"):
-                print(f"   Consensus threshold: {panel_config.consensus.threshold}")
-            
-            evaluations = evaluate_rubric_with_panel(
-                rubric,
-                args.chat_session_file,
-                panel_config
-            )
-        print(f"✓ Evaluated {len(evaluations)} criteria")
-        
-        # Process scores
-        print("\nProcessing scores...")
-        results = evaluate_rubric(rubric, evaluations)
-        
-        # Calculate scores
-        total_score, max_score = calculate_total_score(results)
-        percentage = calculate_percentage_score(results)
-        
-        print(f"✓ Evaluation complete: {total_score}/{max_score} ({percentage:.1f}%)")
-        
-        # Determine output format
-        output_format = getattr(args, 'format', None)
-        if output_format is None:
-            from rubric_kit.output import detect_format_from_extension
-            output_format = detect_format_from_extension(args.output_file)
-        
-        format_name = output_format.upper()
-        print(f"\nWriting results to {args.output_file} ({format_name})...")
-        write_results(results, args.output_file, format=output_format, include_summary=args.include_summary)
-        print(f"✓ {format_name} file written")
-        
-        # Print table
-        if not args.no_table:
-            print("\n" + "=" * 80)
-            print("RESULTS")
-            print("=" * 80 + "\n")
-            print_table(results, include_summary=True)
-            print()
-        
-        return 0
-        
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except RubricValidationError as e:
-        print(f"Rubric validation error: {e}", file=sys.stderr)
-        return 1
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 1
+    # Load rubric
+    print(f"Loading rubric from {args.rubric_yaml}...")
+    rubric = load_rubric(args.rubric_yaml)
+    print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+    
+    # Load or create judge panel configuration
+    if args.judge_panel_config:
+        print(f"\nLoading judge panel configuration from {args.judge_panel_config}...")
+        panel_config = load_judge_panel_config(args.judge_panel_config)
+        print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
+    else:
+        panel_config = create_default_panel_config(args)
+        print(f"\n🤖 Using single judge: {args.model}")
+    
+    # Evaluate based on input type
+    if args.qna_file:
+        print(f"\nEvaluating Q&A from {args.qna_file}...")
+        print_evaluation_config(panel_config)
+        evaluations = evaluate_rubric_with_panel_from_qa(
+            rubric,
+            args.qna_file,
+            panel_config
+        )
+    else:
+        print(f"\nEvaluating chat session from {args.chat_session_file}...")
+        print_evaluation_config(panel_config)
+        evaluations = evaluate_rubric_with_panel(
+            rubric,
+            args.chat_session_file,
+            panel_config
+        )
+    
+    print(f"✓ Evaluated {len(evaluations)} criteria")
+    
+    # Process scores
+    print("\nProcessing scores...")
+    results = evaluate_rubric(rubric, evaluations)
+    
+    # Calculate scores
+    total_score, max_score = calculate_total_score(results)
+    percentage = calculate_percentage_score(results)
+    print(f"✓ Evaluation complete: {total_score}/{max_score} ({percentage:.1f}%)")
+    
+    # Write results
+    output_format = get_output_format(args, args.output_file)
+    format_name = output_format.upper()
+    print(f"\nWriting results to {args.output_file} ({format_name})...")
+    write_results(results, args.output_file, format=output_format, include_summary=args.include_summary)
+    print(f"✓ {format_name} file written")
+    
+    # Print table if requested
+    if not args.no_table:
+        print("\n" + "=" * 80)
+        print("RESULTS")
+        print("=" * 80 + "\n")
+        print_table(results, include_summary=True)
+        print()
+    
+    return 0
 
 
+@handle_command_errors
 def cmd_generate(args) -> int:
     """
     Execute the 'generate' subcommand.
@@ -139,175 +300,67 @@ def cmd_generate(args) -> int:
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    try:
-        # Get API key
-        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
-            return 1
-        
-        # Determine input type and parse accordingly
-        if args.qna_file:
-            # Parse Q&A YAML file
-            print(f"Loading Q&A from {args.qna_file}...")
-            qa_input = parse_qa_input(args.qna_file)
-            print(f"✓ Loaded Q&A pair")
-            print(f"   Q: {qa_input.question[:80]}{'...' if len(qa_input.question) > 80 else ''}")
-            input_obj = qa_input
-            input_type = "qa"
-        else:
-            # Parse chat session file
-            print(f"Loading chat session from {args.chat_session_file}...")
-            chat_input = parse_chat_session(args.chat_session_file)
-            print(f"✓ Loaded chat session")
-            print(f"   Content length: {len(chat_input.content)} characters")
-            print(f"   The LLM will analyze the session to detect tool calls and structure")
-            input_obj = chat_input
-            input_type = "chat"
-        
-        # Parse category hints if provided
-        category_hints = None
-        if args.categories:
-            category_hints = [c.strip() for c in args.categories.split(',')]
-            print(f"   Category hints: {', '.join(category_hints)}")
-        
-        # Initialize generator
-        print(f"\n🤖 Initializing rubric generator...")
-        print(f"   Model: {args.model}")
-        generator = RubricGenerator(
-            api_key=api_key,
-            model=args.model,
-            base_url=args.base_url
+    # Parse input based on type
+    if args.qna_file:
+        print(f"Loading Q&A from {args.qna_file}...")
+        input_obj = parse_qa_input(args.qna_file)
+        print(f"✓ Loaded Q&A pair")
+        print(f"   Q: {input_obj.question[:80]}{'...' if len(input_obj.question) > 80 else ''}")
+        input_type = "qa"
+    else:
+        print(f"Loading chat session from {args.chat_session_file}...")
+        input_obj = parse_chat_session(args.chat_session_file)
+        print(f"✓ Loaded chat session")
+        print(f"   Content length: {len(input_obj.content)} characters")
+        print(f"   The LLM will analyze the session to detect tool calls and structure")
+        input_type = "chat"
+    
+    # Parse category hints if provided
+    category_hints = None
+    if args.categories:
+        category_hints = [c.strip() for c in args.categories.split(',')]
+        print(f"   Category hints: {', '.join(category_hints)}")
+    
+    # Initialize generator
+    print(f"\n🤖 Initializing rubric generator...")
+    print(f"   Model: {args.model}")
+    generator = create_generator(args)
+    
+    # Parse dimension and criteria counts
+    num_dimensions, num_criteria = parse_dimension_criteria_counts(args)
+    
+    # Generate rubric
+    print_generation_progress(num_dimensions, num_criteria)
+    
+    if input_type == "chat":
+        rubric = generator.generate_rubric_from_chat(
+            input_obj,
+            num_dimensions=num_dimensions,
+            num_criteria=num_criteria,
+            category_hints=category_hints
         )
-        
-        # Parse dimension and criteria counts (support "auto" keyword)
-        num_dimensions = None if args.num_dimensions == "auto" else int(args.num_dimensions)
-        num_criteria = None if args.num_criteria == "auto" else int(args.num_criteria)
-        
-        # Generate rubric
-        if num_dimensions is None and num_criteria is None:
-            print(f"\n🔄 Generating rubric with auto-detected dimensions and criteria...")
-        elif num_dimensions is None:
-            print(f"\n🔄 Generating rubric with auto-detected dimensions and {num_criteria} criteria...")
-        elif num_criteria is None:
-            print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and auto-detected criteria...")
-        else:
-            print(f"\n🔄 Generating rubric with {num_dimensions} dimensions and {num_criteria} criteria...")
-        print("   This may take a moment...")
-        
-        if input_type == "chat":
-            rubric = generator.generate_rubric_from_chat(
-                input_obj,
-                num_dimensions=num_dimensions,
-                num_criteria=num_criteria,
-                category_hints=category_hints
-            )
-        else:
-            rubric = generator.generate_rubric(
-                input_obj,
-                num_dimensions=num_dimensions,
-                num_criteria=num_criteria,
-                category_hints=category_hints
-            )
-        
-        print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
-        
-        # Convert rubric to YAML format
-        rubric_dict = {
-            "dimensions": []
-        }
-        
-        for dim in rubric.dimensions:
-            dim_dict = {
-                dim.name: dim.description,
-                "grading_type": dim.grading_type
-            }
-            if dim.scores:
-                dim_dict["scores"] = dim.scores
-            rubric_dict["dimensions"].append(dim_dict)
-        
-        rubric_dict["criteria"] = {}
-        for criterion in rubric.criteria:
-            crit_dict = {
-                "category": criterion.category,
-                "weight": criterion.weight,
-                "dimension": criterion.dimension,
-                "criterion": criterion.criterion
-            }
-            # Add tool_calls if present
-            if criterion.tool_calls:
-                # Use list format where each item is a dict with tool name as key
-                required_list = []
-                for tc in criterion.tool_calls.required:
-                    tool_dict = {}
-                    if tc.min_calls is not None:
-                        tool_dict["min_calls"] = tc.min_calls
-                    if tc.max_calls is not None:
-                        tool_dict["max_calls"] = tc.max_calls
-                    if tc.params:
-                        tool_dict["params"] = tc.params
-                    # Create dict with tool name as key
-                    required_list.append({tc.name: tool_dict if tool_dict else None})
-                
-                optional_list = []
-                for tc in criterion.tool_calls.optional:
-                    tool_dict = {}
-                    if tc.max_calls is not None:
-                        tool_dict["max_calls"] = tc.max_calls
-                    if tc.params:
-                        tool_dict["params"] = tc.params
-                    optional_list.append({tc.name: tool_dict if tool_dict else None})
-                
-                prohibited_list = []
-                for tc in criterion.tool_calls.prohibited:
-                    prohibited_list.append({tc.name: None})
-                
-                crit_dict["tool_calls"] = {
-                    "respect_order": criterion.tool_calls.respect_order,
-                    "required": required_list,
-                    "optional": optional_list if optional_list else [],
-                    "prohibited": prohibited_list if prohibited_list else []
-                }
-            rubric_dict["criteria"][criterion.name] = crit_dict
-        
-        # Write to file
-        print(f"\nWriting rubric to {args.output_yaml}...")
-        with open(args.output_yaml, 'w') as f:
-            yaml.dump(rubric_dict, f, 
-                     sort_keys=False, 
-                     default_flow_style=False,
-                     allow_unicode=True)
-        
-        print(f"✓ Rubric written successfully")
-        
-        # Print summary
-        print("\n" + "=" * 80)
-        print("GENERATED RUBRIC SUMMARY")
-        print("=" * 80)
-        print(f"\nDimensions ({len(rubric.dimensions)}):")
-        for dim in rubric.dimensions:
-            print(f"  • {dim.name} ({dim.grading_type})")
-        
-        print(f"\nCriteria ({len(rubric.criteria)}):")
-        for crit in rubric.criteria:
-            print(f"  • {crit.name} [{crit.category}] - {crit.dimension}")
-        print()
-        
-        return 0
-        
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 1
+    else:
+        rubric = generator.generate_rubric(
+            input_obj,
+            num_dimensions=num_dimensions,
+            num_criteria=num_criteria,
+            category_hints=category_hints
+        )
+    
+    print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+    
+    # Write rubric to file
+    print(f"\nWriting rubric to {args.output_yaml}...")
+    write_rubric_to_file(rubric, args.output_yaml)
+    print(f"✓ Rubric written successfully")
+    
+    # Print summary
+    print_rubric_summary(rubric, "GENERATED RUBRIC SUMMARY")
+    
+    return 0
 
 
+@handle_command_errors
 def cmd_refine(args) -> int:
     """
     Execute the 'refine' subcommand.
@@ -318,141 +371,40 @@ def cmd_refine(args) -> int:
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    try:
-        # Get API key
-        api_key = args.api_key or os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            print("Error: API key required. Set OPENAI_API_KEY environment variable or use --api-key", file=sys.stderr)
-            return 1
-        
-        # Load existing rubric
-        print(f"Loading rubric from {args.rubric_yaml}...")
-        rubric = load_rubric(args.rubric_yaml)
-        print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
-        
-        # Initialize generator
-        print(f"\n🤖 Initializing rubric refiner...")
-        print(f"   Model: {args.model}")
-        generator = RubricGenerator(
-            api_key=api_key,
-            model=args.model,
-            base_url=args.base_url
-        )
-        
-        # Refine rubric
-        feedback_msg = f" with feedback" if args.feedback else ""
-        print(f"\n🔄 Refining rubric{feedback_msg}...")
-        if args.feedback:
-            print(f"   Feedback: {args.feedback}")
-        print("   This may take a moment...")
-        
-        refined_rubric = generator.refine_rubric(
-            rubric,
-            feedback=args.feedback
-        )
-        
-        print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
-        
-        # Convert rubric to YAML format
-        rubric_dict = {
-            "dimensions": []
-        }
-        
-        for dim in refined_rubric.dimensions:
-            dim_dict = {
-                dim.name: dim.description,
-                "grading_type": dim.grading_type
-            }
-            if dim.scores:
-                dim_dict["scores"] = dim.scores
-            rubric_dict["dimensions"].append(dim_dict)
-        
-        rubric_dict["criteria"] = {}
-        for criterion in refined_rubric.criteria:
-            crit_dict = {
-                "category": criterion.category,
-                "weight": criterion.weight,
-                "dimension": criterion.dimension,
-                "criterion": criterion.criterion
-            }
-            # Add tool_calls if present
-            if criterion.tool_calls:
-                # Use list format where each item is a dict with tool name as key
-                required_list = []
-                for tc in criterion.tool_calls.required:
-                    tool_dict = {}
-                    if tc.min_calls is not None:
-                        tool_dict["min_calls"] = tc.min_calls
-                    if tc.max_calls is not None:
-                        tool_dict["max_calls"] = tc.max_calls
-                    if tc.params:
-                        tool_dict["params"] = tc.params
-                    # Create dict with tool name as key
-                    required_list.append({tc.name: tool_dict if tool_dict else None})
-                
-                optional_list = []
-                for tc in criterion.tool_calls.optional:
-                    tool_dict = {}
-                    if tc.max_calls is not None:
-                        tool_dict["max_calls"] = tc.max_calls
-                    if tc.params:
-                        tool_dict["params"] = tc.params
-                    optional_list.append({tc.name: tool_dict if tool_dict else None})
-                
-                prohibited_list = []
-                for tc in criterion.tool_calls.prohibited:
-                    prohibited_list.append({tc.name: None})
-                
-                crit_dict["tool_calls"] = {
-                    "respect_order": criterion.tool_calls.respect_order,
-                    "required": required_list,
-                    "optional": optional_list if optional_list else [],
-                    "prohibited": prohibited_list if prohibited_list else []
-                }
-            rubric_dict["criteria"][criterion.name] = crit_dict
-        
-        # Determine output path
-        output_path = args.output if args.output else args.rubric_yaml
-        
-        # Write to file
-        print(f"\nWriting refined rubric to {output_path}...")
-        with open(output_path, 'w') as f:
-            yaml.dump(rubric_dict, f, 
-                     sort_keys=False, 
-                     default_flow_style=False,
-                     allow_unicode=True)
-        
-        print(f"✓ Refined rubric written successfully")
-        
-        # Print summary
-        print("\n" + "=" * 80)
-        print("REFINED RUBRIC SUMMARY")
-        print("=" * 80)
-        print(f"\nDimensions ({len(refined_rubric.dimensions)}):")
-        for dim in refined_rubric.dimensions:
-            print(f"  • {dim.name} ({dim.grading_type})")
-        
-        print(f"\nCriteria ({len(refined_rubric.criteria)}):")
-        for crit in refined_rubric.criteria:
-            print(f"  • {crit.name} [{crit.category}] - {crit.dimension}")
-        print()
-        
-        return 0
-        
-    except FileNotFoundError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except RubricValidationError as e:
-        print(f"Rubric validation error: {e}", file=sys.stderr)
-        return 1
-    except ValueError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-    except Exception as e:
-        print(f"Unexpected error: {e}", file=sys.stderr)
-        import traceback
-        traceback.print_exc()
-        return 1
+    # Load existing rubric
+    print(f"Loading rubric from {args.rubric_yaml}...")
+    rubric = load_rubric(args.rubric_yaml)
+    print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+    
+    # Initialize generator
+    print(f"\n🤖 Initializing rubric refiner...")
+    print(f"   Model: {args.model}")
+    generator = create_generator(args)
+    
+    # Refine rubric
+    feedback_msg = f" with feedback" if args.feedback else ""
+    print(f"\n🔄 Refining rubric{feedback_msg}...")
+    if args.feedback:
+        print(f"   Feedback: {args.feedback}")
+    print("   This may take a moment...")
+    
+    refined_rubric = generator.refine_rubric(
+        rubric,
+        feedback=args.feedback
+    )
+    
+    print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
+    
+    # Determine output path and write
+    output_path = args.output if args.output else args.rubric_yaml
+    print(f"\nWriting refined rubric to {output_path}...")
+    write_rubric_to_file(refined_rubric, output_path)
+    print(f"✓ Refined rubric written successfully")
+    
+    # Print summary
+    print_rubric_summary(refined_rubric, "REFINED RUBRIC SUMMARY")
+    
+    return 0
 
 
 def main() -> int:
