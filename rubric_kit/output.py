@@ -7,6 +7,61 @@ import os
 from typing import List, Dict, Any, Tuple
 from tabulate import tabulate
 
+# Constants
+DEFAULT_CSV_FIELDS = ["criterion_name", "category", "dimension", "result", "score", "max_score"]
+PRIORITY_FIELDS = ["criterion_name", "category", "dimension", "criterion_text", "result", "score", "max_score", "reason"]
+FORMAT_EXTENSIONS = {
+    '.json': 'json',
+    '.yaml': 'yaml',
+    '.yml': 'yaml',
+    '.csv': 'csv'
+}
+
+
+def _extract_judge_vote_value(vote: Dict[str, Any]) -> str | int:
+    """Extract vote value from a judge vote dictionary."""
+    if "passes" in vote:
+        return "pass" if vote["passes"] else "fail"
+    if "score" in vote:
+        return vote["score"]
+    return ""
+
+
+def _expand_judge_votes(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Expand judge_votes into separate columns for a single result."""
+    expanded_result = result.copy()
+    judge_votes = result.get("judge_votes", [])
+    
+    if not isinstance(judge_votes, list):
+        return expanded_result
+    
+    expanded_result.pop("judge_votes", None)
+    
+    for vote in judge_votes:
+        judge_name = vote.get("judge", "unknown")
+        vote_value = _extract_judge_vote_value(vote)
+        
+        if vote_value:
+            expanded_result[f"judge_{judge_name}_vote"] = vote_value
+        
+        if "reason" in vote:
+            expanded_result[f"judge_{judge_name}_reason"] = vote["reason"]
+    
+    return expanded_result
+
+
+def _order_fieldnames(fieldnames: List[str]) -> List[str]:
+    """Order fieldnames with priority fields first, judge fields last."""
+    fieldnames_set = set(fieldnames)
+    judge_fields = [f for f in fieldnames if f.startswith("judge_")]
+    other_fields = [f for f in fieldnames if f not in PRIORITY_FIELDS and not f.startswith("judge_")]
+    
+    ordered = [f for f in PRIORITY_FIELDS if f in fieldnames_set]
+    ordered.extend(sorted(other_fields))
+    ordered.extend(sorted(judge_fields))
+    
+    return ordered
+
 
 def _prepare_data_for_csv(
     results: List[Dict[str, Any]]
@@ -21,52 +76,15 @@ def _prepare_data_for_csv(
         Tuple of (expanded_results, fieldnames)
     """
     if not results:
-        return [], ["criterion_name", "category", "dimension", "result", "score", "max_score"]
+        return [], DEFAULT_CSV_FIELDS
     
-    # Expand judge_votes into separate columns
-    expanded_results = []
-    judge_names = set()
+    expanded_results = [_expand_judge_votes(result) for result in results]
     
-    for result in results:
-        expanded_result = {}
-        for key, value in result.items():
-            if key == "judge_votes" and isinstance(value, list):
-                # Extract judge votes into separate columns
-                for vote in value:
-                    judge_name = vote.get("judge", "unknown")
-                    judge_names.add(judge_name)
-                    
-                    # Add vote details as separate columns
-                    if "passes" in vote:
-                        expanded_result[f"judge_{judge_name}_vote"] = "pass" if vote["passes"] else "fail"
-                    elif "score" in vote:
-                        expanded_result[f"judge_{judge_name}_vote"] = vote["score"]
-                    
-                    if "reason" in vote:
-                        expanded_result[f"judge_{judge_name}_reason"] = vote["reason"]
-            else:
-                expanded_result[key] = value
-        
-        expanded_results.append(expanded_result)
-    
-    # Get all unique keys from expanded results
     fieldnames_set = set()
     for result in expanded_results:
         fieldnames_set.update(result.keys())
-    fieldnames = sorted(list(fieldnames_set))
     
-    # Ensure common fields come first, judge columns at the end
-    priority_fields = ["criterion_name", "category", "dimension", "criterion_text", "result", "score", "max_score", "reason"]
-    judge_fields = [f for f in fieldnames if f.startswith("judge_")]
-    other_fields = [f for f in fieldnames if f not in priority_fields and not f.startswith("judge_")]
-    
-    ordered_fieldnames = []
-    for field in priority_fields:
-        if field in fieldnames:
-            ordered_fieldnames.append(field)
-    ordered_fieldnames.extend(sorted(other_fields))
-    ordered_fieldnames.extend(sorted(judge_fields))
-    fieldnames = ordered_fieldnames
+    fieldnames = _order_fieldnames(list(fieldnames_set))
     
     return expanded_results, fieldnames
 
@@ -101,6 +119,13 @@ def _calculate_summary(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _create_summary_row(fieldnames: List[str], summary: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a summary row with empty values for all fields, then update with summary data."""
+    summary_row = {key: "" for key in fieldnames}
+    summary_row.update(summary)
+    return summary_row
+
+
 def write_csv(
     results: List[Dict[str, Any]], 
     output_path: str, 
@@ -116,27 +141,27 @@ def write_csv(
     """
     expanded_results, fieldnames = _prepare_data_for_csv(results)
     
-    if not expanded_results:
-        # Write empty CSV with headers
-        with open(output_path, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(fieldnames)
-        return
-    
     with open(output_path, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         
-        # Write result rows
         for result in expanded_results:
             writer.writerow(result)
         
-        # Add summary row if requested
         if include_summary:
             summary = _calculate_summary(results)
-            summary_row = {key: "" for key in fieldnames}
-            summary_row.update(summary)
+            summary_row = _create_summary_row(fieldnames, summary)
             writer.writerow(summary_row)
+
+
+def _prepare_structured_output(results: List[Dict[str, Any]], include_summary: bool) -> Dict[str, Any]:
+    """Prepare output data structure with optional summary."""
+    output_data = {"results": results}
+    
+    if include_summary:
+        output_data["summary"] = _calculate_summary(results)
+    
+    return output_data
 
 
 def write_json(
@@ -152,12 +177,7 @@ def write_json(
         output_path: Path to output JSON file
         include_summary: Whether to include summary in output
     """
-    output_data = {
-        "results": results
-    }
-    
-    if include_summary:
-        output_data["summary"] = _calculate_summary(results)
+    output_data = _prepare_structured_output(results, include_summary)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
@@ -176,12 +196,7 @@ def write_yaml(
         output_path: Path to output YAML file
         include_summary: Whether to include summary in output
     """
-    output_data = {
-        "results": results
-    }
-    
-    if include_summary:
-        output_data["summary"] = _calculate_summary(results)
+    output_data = _prepare_structured_output(results, include_summary)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(output_data, f, 
@@ -201,16 +216,7 @@ def detect_format_from_extension(output_path: str) -> str:
         Format string: 'csv', 'json', or 'yaml'
     """
     ext = os.path.splitext(output_path)[1].lower()
-    
-    if ext == '.json':
-        return 'json'
-    elif ext in ('.yaml', '.yml'):
-        return 'yaml'
-    elif ext == '.csv':
-        return 'csv'
-    else:
-        # Default to CSV if extension is not recognized
-        return 'csv'
+    return FORMAT_EXTENSIONS.get(ext, 'csv')
 
 
 def write_results(
@@ -228,20 +234,67 @@ def write_results(
         format: Output format ('csv', 'json', 'yaml'). If None, detected from file extension.
         include_summary: Whether to include summary in output
     """
-    # Auto-detect format from extension if not specified
     if format is None:
         format = detect_format_from_extension(output_path)
     
     format = format.lower()
     
-    if format == 'csv':
-        write_csv(results, output_path, include_summary=include_summary)
-    elif format == 'json':
-        write_json(results, output_path, include_summary=include_summary)
-    elif format == 'yaml':
-        write_yaml(results, output_path, include_summary=include_summary)
-    else:
+    writers = {
+        'csv': write_csv,
+        'json': write_json,
+        'yaml': write_yaml
+    }
+    
+    writer = writers.get(format)
+    if writer is None:
         raise ValueError(f"Unsupported format: {format}. Supported formats: csv, json, yaml")
+    
+    writer(results, output_path, include_summary=include_summary)
+
+
+def _format_consensus_indicator(consensus_reached: bool) -> str:
+    """Format consensus indicator symbol."""
+    return "✓" if consensus_reached else "⚠"
+
+
+def _format_agreement(result: Dict[str, Any]) -> str:
+    """Format agreement as 'X/Y' or 'N/A'."""
+    consensus_count = result.get("consensus_count")
+    if consensus_count is None:
+        return "N/A"
+    
+    judge_votes = result.get("judge_votes", [])
+    total_judges = len(judge_votes) if judge_votes else consensus_count
+    return f"{consensus_count}/{total_judges}"
+
+
+def _format_result_row(result: Dict[str, Any]) -> List[str]:
+    """Format a single result into a table row."""
+    score = result.get("score", 0)
+    max_score = result.get("max_score", 0)
+    consensus_reached = result.get("consensus_reached", True)
+    
+    return [
+        result.get("criterion_name", ""),
+        result.get("dimension", ""),
+        str(result.get("result", "")),
+        f"{score}/{max_score}",
+        _format_consensus_indicator(consensus_reached),
+        _format_agreement(result)
+    ]
+
+
+def _add_summary_rows(rows: List[List[str]], results: List[Dict[str, Any]]) -> None:
+    """Add separator and summary rows to the table."""
+    total_score = sum(r["score"] for r in results)
+    max_score = sum(r["max_score"] for r in results)
+    percentage = (total_score / max_score * 100) if max_score > 0 else 0
+    
+    separator = ["─" * 20, "─" * 10, "─" * 10, "─" * 10, "─" * 9, "─" * 10]
+    summary = ["TOTAL", "", f"{percentage:.1f}%", f"{total_score}/{max_score}", "", ""]
+    
+    rows.append(separator)
+    rows.append(summary)
 
 
 def format_table(results: List[Dict[str, Any]], include_summary: bool = True) -> str:
@@ -261,66 +314,13 @@ def format_table(results: List[Dict[str, Any]], include_summary: bool = True) ->
     if not results:
         return "No results to display."
     
-    # Prepare table data with simplified columns
     headers = ["Criterion", "Dimension", "Result", "Score", "Consensus", "Agreement"]
-    rows = []
+    rows = [_format_result_row(result) for result in results]
     
-    for result in results:
-        result_str = str(result.get("result", ""))
-        score = result.get("score", 0)
-        max_score = result.get("max_score", 0)
-        
-        # Format consensus indicator
-        consensus_reached = result.get("consensus_reached", True)
-        consensus_indicator = "✓" if consensus_reached else "⚠"
-        
-        # Format agreement as "2/3" or "N/A" if not available
-        consensus_count = result.get("consensus_count")
-        if consensus_count is not None:
-            # Try to determine total judges from judge_votes if available
-            judge_votes = result.get("judge_votes", [])
-            total_judges = len(judge_votes) if judge_votes else consensus_count
-            agreement = f"{consensus_count}/{total_judges}"
-        else:
-            agreement = "N/A"
-        
-        row = [
-            result.get("criterion_name", ""),
-            result.get("dimension", ""),
-            result_str,
-            f"{score}/{max_score}",
-            consensus_indicator,
-            agreement
-        ]
-        rows.append(row)
-    
-    # Add summary row if requested
     if include_summary:
-        total_score = sum(r["score"] for r in results)
-        max_score = sum(r["max_score"] for r in results)
-        percentage = (total_score / max_score * 100) if max_score > 0 else 0
-        
-        rows.append([
-            "─" * 20,
-            "─" * 10,
-            "─" * 10,
-            "─" * 10,
-            "─" * 9,
-            "─" * 10
-        ])
-        
-        rows.append([
-            "TOTAL",
-            "",
-            f"{percentage:.1f}%",
-            f"{total_score}/{max_score}",
-            "",
-            ""
-        ])
+        _add_summary_rows(rows, results)
     
-    # Format as table
-    table = tabulate(rows, headers=headers, tablefmt="grid")
-    return table
+    return tabulate(rows, headers=headers, tablefmt="grid")
 
 
 def print_table(results: List[Dict[str, Any]], include_summary: bool = True) -> None:
