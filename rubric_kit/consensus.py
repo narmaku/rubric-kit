@@ -2,7 +2,92 @@
 
 from typing import Dict, List, Any, Literal
 from collections import Counter
-import statistics
+
+
+def _validate_consensus_inputs(votes: List[Dict[str, Any]], threshold: int) -> None:
+    """Validate inputs for consensus functions.
+    
+    Raises:
+        ValueError: If votes is empty, threshold is invalid, or threshold exceeds votes
+    """
+    if not votes:
+        raise ValueError("No votes provided")
+    
+    if threshold <= 0:
+        raise ValueError("Threshold must be positive")
+    
+    if threshold > len(votes):
+        raise ValueError(f"Threshold ({threshold}) exceeds number of votes ({len(votes)})")
+
+
+def _resolve_binary_no_consensus(
+    pass_count: int,
+    fail_count: int,
+    on_no_consensus: Literal["fail", "most_common"]
+) -> bool:
+    """Resolve binary consensus when threshold is not met.
+    
+    Args:
+        pass_count: Number of pass votes
+        fail_count: Number of fail votes
+        on_no_consensus: Strategy to use when no consensus
+        
+    Returns:
+        Final pass/fail decision
+    """
+    if on_no_consensus == "most_common":
+        return pass_count > fail_count
+    
+    return False  # Conservative: fail
+
+
+def _calculate_median_score(scores: List[int]) -> int:
+    """Calculate median score from a list of scores.
+    
+    Args:
+        scores: List of scores
+        
+    Returns:
+        Median score (integer)
+    """
+    sorted_scores = sorted(scores)
+    n = len(sorted_scores)
+    
+    if n % 2 == 0:
+        # Even number: average of two middle values
+        return (sorted_scores[n // 2 - 1] + sorted_scores[n // 2]) // 2
+    
+    # Odd number: middle value
+    return sorted_scores[n // 2]
+
+
+def _resolve_score_no_consensus(
+    scores: List[int],
+    score_counts: Counter,
+    most_common_count: int,
+    on_no_consensus: Literal["fail", "median", "most_common"]
+) -> int:
+    """Resolve score consensus when threshold is not met.
+    
+    Args:
+        scores: List of all scores
+        score_counts: Counter of score frequencies
+        most_common_count: Count of the most common score
+        on_no_consensus: Strategy to use when no consensus
+        
+    Returns:
+        Final score decision
+    """
+    if on_no_consensus == "median":
+        return _calculate_median_score(scores)
+    
+    if on_no_consensus == "most_common":
+        max_count = max(score_counts.values())
+        tied_scores = [score for score, count in score_counts.items() if count == max_count]
+        return min(tied_scores)  # Conservative: minimum when tied
+    
+    # "fail" - conservative approach (minimum score)
+    return min(scores)
 
 
 def apply_binary_consensus(
@@ -28,21 +113,12 @@ def apply_binary_consensus(
     Raises:
         ValueError: If votes is empty, threshold is invalid, or threshold exceeds votes
     """
-    # Validate inputs
-    if not votes:
-        raise ValueError("No votes provided")
+    _validate_consensus_inputs(votes, threshold)
     
-    if threshold <= 0:
-        raise ValueError("Threshold must be positive")
-    
-    if threshold > len(votes):
-        raise ValueError(f"Threshold ({threshold}) exceeds number of votes ({len(votes)})")
-    
-    # Count votes
     pass_count = sum(1 for v in votes if v["passes"])
     fail_count = len(votes) - pass_count
     
-    # Check for consensus
+    # Early return for pass consensus
     if pass_count >= threshold:
         return {
             "consensus_reached": True,
@@ -50,29 +126,26 @@ def apply_binary_consensus(
             "consensus_count": pass_count,
             "judge_votes": votes
         }
-    elif fail_count >= threshold:
+    
+    # Early return for fail consensus
+    if fail_count >= threshold:
         return {
             "consensus_reached": True,
             "passes": False,
             "consensus_count": fail_count,
             "judge_votes": votes
         }
-    else:
-        # No consensus reached
-        max_count = max(pass_count, fail_count)
-        
-        if on_no_consensus == "most_common":
-            # Use most common vote (if tie, default to fail/conservative)
-            passes = pass_count > fail_count
-        else:  # "fail" - conservative approach
-            passes = False
-        
-        return {
-            "consensus_reached": False,
-            "passes": passes,
-            "consensus_count": max_count,
-            "judge_votes": votes
-        }
+    
+    # No consensus reached
+    max_count = max(pass_count, fail_count)
+    passes = _resolve_binary_no_consensus(pass_count, fail_count, on_no_consensus)
+    
+    return {
+        "consensus_reached": False,
+        "passes": passes,
+        "consensus_count": max_count,
+        "judge_votes": votes
+    }
 
 
 def apply_score_consensus(
@@ -98,22 +171,13 @@ def apply_score_consensus(
     Raises:
         ValueError: If votes is empty, threshold is invalid, or threshold exceeds votes
     """
-    # Validate inputs
-    if not votes:
-        raise ValueError("No votes provided")
+    _validate_consensus_inputs(votes, threshold)
     
-    if threshold <= 0:
-        raise ValueError("Threshold must be positive")
-    
-    if threshold > len(votes):
-        raise ValueError(f"Threshold ({threshold}) exceeds number of votes ({len(votes)})")
-    
-    # Count scores
     scores = [v["score"] for v in votes]
     score_counts = Counter(scores)
     most_common_score, most_common_count = score_counts.most_common(1)[0]
     
-    # Check for consensus
+    # Early return for consensus
     if most_common_count >= threshold:
         return {
             "consensus_reached": True,
@@ -121,32 +185,16 @@ def apply_score_consensus(
             "consensus_count": most_common_count,
             "judge_votes": votes
         }
-    else:
-        # No consensus reached - apply fallback strategy
-        if on_no_consensus == "median":
-            # Use median score
-            sorted_scores = sorted(scores)
-            n = len(sorted_scores)
-            if n % 2 == 0:
-                # Even number: average of two middle values
-                median = (sorted_scores[n // 2 - 1] + sorted_scores[n // 2]) // 2
-            else:
-                # Odd number: middle value
-                median = sorted_scores[n // 2]
-            final_score = median
-        elif on_no_consensus == "most_common":
-            # Use most common score (if tie, use minimum for conservative)
-            # Get all scores with max count
-            max_count = max(score_counts.values())
-            tied_scores = [score for score, count in score_counts.items() if count == max_count]
-            final_score = min(tied_scores)  # Conservative: minimum when tied
-        else:  # "fail" - conservative approach (minimum score)
-            final_score = min(scores)
-        
-        return {
-            "consensus_reached": False,
-            "score": final_score,
-            "consensus_count": most_common_count,
-            "judge_votes": votes
-        }
+    
+    # No consensus reached - apply fallback strategy
+    final_score = _resolve_score_no_consensus(
+        scores, score_counts, most_common_count, on_no_consensus
+    )
+    
+    return {
+        "consensus_reached": False,
+        "score": final_score,
+        "consensus_count": most_common_count,
+        "judge_votes": votes
+    }
 
