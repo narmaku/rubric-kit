@@ -44,14 +44,37 @@ def execute_judges(
     if not judges:
         raise ValueError("No judges provided")
     
-    if execution_mode == "sequential":
-        return _execute_sequential(judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout)
-    elif execution_mode == "parallel":
-        return _execute_parallel(judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout)
-    elif execution_mode == "batched":
-        return _execute_batched(judges, judge_function, criterion, chat_content, dimension, parsed_session, batch_size, timeout)
-    else:
+    execution_strategies = {
+        "sequential": lambda: _execute_sequential(
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+        ),
+        "parallel": lambda: _execute_parallel(
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+        ),
+        "batched": lambda: _execute_batched(
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, batch_size, timeout
+        ),
+    }
+    
+    strategy = execution_strategies.get(execution_mode)
+    if strategy is None:
         raise ValueError(f"Invalid execution mode: {execution_mode}")
+    
+    return strategy()
+
+
+def _create_error_result(judge_name: str, error_message: str) -> Dict[str, Any]:
+    """Create a standardized error result for a judge evaluation."""
+    return {
+        "judge": judge_name,
+        "error": f"Judge evaluation failed: {error_message}"
+    }
+
+
+def _create_success_result(judge_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Add judge name to successful result."""
+    result["judge"] = judge_name
+    return result
 
 
 def _execute_sequential(
@@ -67,26 +90,10 @@ def _execute_sequential(
     results = []
     
     for judge in judges:
-        try:
-            # Call judge function with timeout
-            result = _call_judge_with_timeout(
-                judge_function,
-                judge,
-                criterion,
-                chat_content,
-                dimension,
-                parsed_session,
-                timeout
-            )
-            # Add judge name to result
-            result["judge"] = judge.name
-            results.append(result)
-        except Exception as e:
-            # On error, add error result
-            results.append({
-                "judge": judge.name,
-                "error": f"Judge evaluation failed: {str(e)}"
-            })
+        result = _call_judge_safe(
+            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout
+        )
+        results.append(result)
     
     return results
 
@@ -101,15 +108,8 @@ def _execute_parallel(
     timeout: int
 ) -> List[Dict[str, Any]]:
     """Execute all judges in parallel using asyncio."""
-    # Run async execution in event loop
     return asyncio.run(_execute_parallel_async(
-        judges,
-        judge_function,
-        criterion,
-        chat_content,
-        dimension,
-        parsed_session,
-        timeout
+        judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
     ))
 
 
@@ -125,10 +125,8 @@ async def _execute_parallel_async(
     """Async helper for parallel execution."""
     loop = asyncio.get_event_loop()
     
-    # Create tasks for all judges
-    tasks = []
-    for judge in judges:
-        task = loop.run_in_executor(
+    tasks = [
+        loop.run_in_executor(
             None,
             _call_judge_safe,
             judge_function,
@@ -139,12 +137,10 @@ async def _execute_parallel_async(
             parsed_session,
             timeout
         )
-        tasks.append(task)
+        for judge in judges
+    ]
     
-    # Wait for all tasks to complete
-    results = await asyncio.gather(*tasks)
-    
-    return results
+    return await asyncio.gather(*tasks)
 
 
 def _execute_batched(
@@ -160,21 +156,11 @@ def _execute_batched(
     """Execute judges in batches."""
     results = []
     
-    # Process judges in batches
     for i in range(0, len(judges), batch_size):
         batch = judges[i:i + batch_size]
-        
-        # Execute this batch in parallel
         batch_results = asyncio.run(_execute_parallel_async(
-            batch,
-            judge_function,
-            criterion,
-            chat_content,
-            dimension,
-            parsed_session,
-            timeout
+            batch, judge_function, criterion, chat_content, dimension, parsed_session, timeout
         ))
-        
         results.extend(batch_results)
     
     return results
@@ -192,16 +178,11 @@ def _call_judge_with_timeout(
     """Call judge function with timeout using ThreadPoolExecutor."""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
-            judge_function,
-            judge,
-            criterion,
-            chat_content,
-            dimension,
-            parsed_session
+            judge_function, judge, criterion, chat_content, dimension, parsed_session
         )
+        
         try:
-            result = future.result(timeout=timeout)
-            return result
+            return future.result(timeout=timeout)
         except FuturesTimeoutError:
             raise TimeoutError(f"Judge {judge.name} evaluation timed out after {timeout}s")
 
@@ -215,24 +196,12 @@ def _call_judge_safe(
     parsed_session: Optional[Any],
     timeout: int
 ) -> Dict[str, Any]:
-    """Safely call judge function, catching errors."""
+    """Safely call judge function, catching all errors and returning standardized result."""
     try:
         result = _call_judge_with_timeout(
-            judge_function,
-            judge,
-            criterion,
-            chat_content,
-            dimension,
-            parsed_session,
-            timeout
+            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout
         )
-        # Add judge name to result
-        result["judge"] = judge.name
-        return result
+        return _create_success_result(judge.name, result)
     except Exception as e:
-        # Return error result
-        return {
-            "judge": judge.name,
-            "error": f"Judge evaluation failed: {str(e)}"
-        }
+        return _create_error_result(judge.name, str(e))
 
