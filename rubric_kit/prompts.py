@@ -10,10 +10,10 @@ All prompts and configurations are designed to be easily identifiable and modifi
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import yaml
 
-from rubric_kit.schema import Criterion, Dimension
+from rubric_kit.schema import Criterion, Dimension, ToolSpec, ToolCalls
 
 
 # =============================================================================
@@ -76,6 +76,404 @@ GENERATOR_CONFIG = LLMConfig(
     temperature=0.7,  # More creative for generation tasks
     max_tokens=16384   # Longer responses for generating rubrics (increased for complex rubrics)
 )
+
+
+# =============================================================================
+# HELPER FUNCTIONS FOR TOOL CALL PROMPTS
+# =============================================================================
+
+def _format_tool_constraints(tool: ToolSpec) -> str:
+    """Format min/max call constraints for a tool."""
+    constraints = []
+    if tool.min_calls is not None:
+        constraints.append(f"min: {tool.min_calls}")
+    if tool.max_calls is not None:
+        constraints.append(f"max: {tool.max_calls}")
+    return f" ({', '.join(constraints)})" if constraints else ""
+
+
+def _format_tool_params(tool: ToolSpec) -> str:
+    """Format parameter requirements for a tool."""
+    if not tool.params:
+        return ""
+    params_list = [f"{k}: {v}" for k, v in tool.params.items()]
+    return f" with parameters: {', '.join(params_list)}"
+
+
+def _build_required_tools_section(tool_calls: ToolCalls) -> str:
+    """Build the required tools section of the prompt."""
+    if not tool_calls.required:
+        return ""
+    
+    lines = []
+    for tool in tool_calls.required:
+        constraint = _format_tool_constraints(tool)
+        params_info = _format_tool_params(tool)
+        lines.append(f"  - {tool.name}{constraint}{params_info}")
+    
+    return "**Required Tools:**\n" + "\n".join(lines)
+
+
+def _build_optional_tools_section(tool_calls: ToolCalls) -> str:
+    """Build the optional tools section of the prompt."""
+    if not tool_calls.optional:
+        return ""
+    
+    lines = []
+    for tool in tool_calls.optional:
+        max_constraint = f" (max: {tool.max_calls})" if tool.max_calls is not None else ""
+        lines.append(f"  - {tool.name}{max_constraint}")
+    
+    return "\n\n**Optional Tools:**\n" + "\n".join(lines)
+
+
+def _build_prohibited_tools_section(tool_calls: ToolCalls) -> str:
+    """Build the prohibited tools section of the prompt."""
+    if not tool_calls.prohibited:
+        return ""
+    
+    lines = [f"  - {tool.name}" for tool in tool_calls.prohibited]
+    return "\n\n**Prohibited Tools:**\n" + "\n".join(lines)
+
+
+def _build_required_tool_lists(tool_calls: ToolCalls) -> Tuple[str, str, str, str]:
+    """
+    Build various formats of required tool lists.
+    
+    Returns:
+        Tuple of (numbered_list, labeled_list, comma_separated, bullet_list)
+    """
+    if not tool_calls.required:
+        return "", "", "", ""
+    
+    tool_names = [tool.name for tool in tool_calls.required]
+    numbered_items = [f"{i}. {name}" for i, name in enumerate(tool_names, 1)]
+    labeled_items = [f"REQUIRED TOOL #{i}: {name}" for i, name in enumerate(tool_names, 1)]
+    comma_separated = ", ".join(tool_names)
+    bullet_list = "\n".join([f"   - {name}" for name in tool_names])
+    
+    return (
+        "\n".join(numbered_items),
+        "\n".join(labeled_items),
+        comma_separated,
+        bullet_list
+    )
+
+
+def _build_param_check_instructions(tool_calls: ToolCalls) -> str:
+    """Build parameter checking instructions if any tools have params."""
+    has_params = any(tool.params for tool in tool_calls.required) if tool_calls.required else False
+    if not has_params:
+        return ""
+    
+    return """
+   
+   **Check parameters** (CRITICAL)
+   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values
+   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)
+   - Parameter names must match exactly (case-sensitive)
+   - Parameter values must match exactly (no partial matches, no "close enough")
+   - Missing parameters = FAIL
+   - Wrong parameter values = FAIL
+   - Extra parameters are OK (only required ones must match)
+   - If ANY required parameter is missing or wrong → FAIL"""
+
+
+def _find_tool_call_parameters(
+    tool_name: str,
+    parsed_tool_calls: Optional[List[Any]]
+) -> str:
+    """Find and format parameters for a specific tool call."""
+    if not parsed_tool_calls:
+        return ""
+    
+    for tc in parsed_tool_calls:
+        if (_matches_tool_name(tc, tool_name) and tc.parameters):
+            params_list = []
+            for k, v in tc.parameters.items():
+                param_value = "null" if v is None else str(v)
+                params_list.append(f"{k}: {param_value}")
+            if params_list:
+                return f" (parameters: {', '.join(params_list)})"
+    
+    return ""
+
+
+def _matches_tool_name(tool_call: Any, name: str) -> bool:
+    """Check if a tool call matches a given name."""
+    return (
+        tool_call.full_name == name or
+        tool_call.function == name or
+        name.endswith(f".{tool_call.function}") or
+        tool_call.full_name.endswith(f".{name}")
+    )
+
+
+def _build_actual_calls_section(
+    tool_call_sequence: Optional[List[str]],
+    parsed_tool_calls: Optional[List[Any]]
+) -> str:
+    """Build the actual tool calls section from pre-parsed data."""
+    if tool_call_sequence is None:
+        return ""
+    
+    call_lines = []
+    for i, name in enumerate(tool_call_sequence, 1):
+        params_str = _find_tool_call_parameters(name, parsed_tool_calls)
+        call_lines.append(f"{i}. {name}{params_str}")
+    
+    return f"""
+**EXTRACTED TOOL CALLS (in order):**
+{chr(10).join(call_lines)}
+"""
+
+
+def _build_order_evaluation_body(
+    tool_calls: ToolCalls,
+    required_tool_list_numbered: str,
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str,
+    actual_calls_section: str,
+    has_preparsed_data: bool
+) -> str:
+    """Build evaluation body for order-sensitive tool call evaluation."""
+    if has_preparsed_data:
+        return _build_order_evaluation_with_data(
+            required_tool_list_numbered,
+            required_tool_list,
+            required_tool_names_bullets,
+            required_tool_names_list,
+            param_check_instructions,
+            actual_calls_section
+        )
+    
+    return _build_order_evaluation_without_data(
+        required_tool_list_numbered,
+        required_tool_list,
+        required_tool_names_bullets,
+        required_tool_names_list,
+        param_check_instructions
+    )
+
+
+def _build_order_evaluation_with_data(
+    required_tool_list_numbered: str,
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str,
+    actual_calls_section: str
+) -> str:
+    """Build order evaluation body when pre-parsed data is available."""
+    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else ""
+    
+    return f"""**Evaluation Instructions:**
+
+Expected order:
+{required_tool_list_numbered}
+
+The specification requires these tools IN THIS EXACT ORDER:
+{required_tool_list}
+{actual_calls_section}
+
+**Your task:**
+
+1. **Compare the extracted calls against required order**
+   - Position 1: Does extracted call #1 match REQUIRED TOOL #1?
+   - Position 2: Does extracted call #2 match REQUIRED TOOL #2?
+   - Continue for all positions
+   - If ANY position doesn't match → ORDER IS WRONG → FAIL
+   
+2. **Check other requirements**
+   - All required tools present? The required tools are:
+{required_tool_names_bullets}
+   - Call counts within limits (if specified)?
+   - Optional tools within limits (if any)?
+   - No prohibited tools called (if any)?{param_check_instructions}
+
+3. **Final result**
+   - Order wrong → FAIL
+   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
+   - Violated any limit → FAIL
+   - Wrong or missing parameters → FAIL
+   - Otherwise → PASS
+
+**Your response format (2 lines only):**
+RESULT: [PASS or FAIL]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Copy the exact tool identifier from the list above, such as "{first_tool_example}" or another tool from the list.]
+"""
+
+
+def _build_order_evaluation_without_data(
+    required_tool_list_numbered: str,
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str
+) -> str:
+    """Build order evaluation body when data must be extracted from chat."""
+    return f"""**Evaluation Instructions:**
+
+Expected order:
+{required_tool_list_numbered}
+
+The specification requires these tools IN THIS EXACT ORDER:
+{required_tool_list}
+
+**Your task:**
+
+1. **Find the tool calls in the chat session**
+   - Scan through the chat session and identify all tool calls
+   - Extract the tool names in the order they were called
+   
+2. **Write down the actual order you found**
+   - List them: "First tool called: <actual_tool_name>, Second tool called: <actual_tool_name>, ..."
+   - IMPORTANT: Use the actual tool names you found in the chat session, not placeholders
+   
+3. **Compare against the required order**
+   - Position 1: Does first tool called = REQUIRED TOOL #1? (MUST match exactly)
+   - Position 2: Does second tool called = REQUIRED TOOL #2? (MUST match exactly)
+   - Continue for all positions
+   - If ANY position doesn't match → ORDER IS WRONG → FAIL
+   
+4. **Check other requirements**
+   - All required tools present? The required tools are:
+{required_tool_names_bullets}
+   - Call counts within limits (if specified)?
+   - Optional tools within limits (if any)?
+   - No prohibited tools called (if any)?{param_check_instructions}
+
+5. **Final result**
+   - Order wrong → FAIL
+   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
+   - Violated any limit → FAIL
+   - Wrong or missing parameters → FAIL
+   - Otherwise → PASS
+
+**Your response format (2 lines only):**
+RESULT: [PASS or FAIL]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Use the exact tool name, not a placeholder or the word "name".]
+"""
+
+
+def _build_presence_evaluation_body(
+    tool_calls: ToolCalls,
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str,
+    actual_calls_section: str,
+    has_preparsed_data: bool
+) -> str:
+    """Build evaluation body for order-insensitive tool call evaluation."""
+    if has_preparsed_data:
+        return _build_presence_evaluation_with_data(
+            required_tool_list,
+            required_tool_names_bullets,
+            required_tool_names_list,
+            param_check_instructions,
+            actual_calls_section
+        )
+    
+    return _build_presence_evaluation_without_data(
+        required_tool_list,
+        required_tool_names_bullets,
+        required_tool_names_list,
+        param_check_instructions
+    )
+
+
+def _build_presence_evaluation_with_data(
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str,
+    actual_calls_section: str
+) -> str:
+    """Build presence evaluation body when pre-parsed data is available."""
+    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else "[tool_identifier]"
+    
+    return f"""**Evaluation Instructions:**
+
+The specification requires these tools (ORDER DOESN'T MATTER):
+{required_tool_list}
+{actual_calls_section}
+
+**Your task:**
+
+1. **Check presence**
+   - The following required tools MUST be present in the extracted calls:
+{required_tool_names_bullets}
+   - Check if each of these exact tool identifiers appears in the extracted calls list above
+   - Order doesn't matter
+   - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
+   
+2. **Check counts** (if limits specified)
+   - Are call counts within min/max limits?
+   - Are optional tools within limits (if any)?{param_check_instructions}
+   
+3. **Check prohibitions** (if any)
+   - Were any prohibited tools called?
+
+4. **Final result**
+   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
+   - Violated any limit → FAIL
+   - Called prohibited tool → FAIL
+   - Wrong or missing parameters → FAIL
+   - Otherwise → PASS
+
+**Your response format (2 lines only):**
+RESULT: [PASS or FAIL]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+"""
+
+
+def _build_presence_evaluation_without_data(
+    required_tool_list: str,
+    required_tool_names_bullets: str,
+    required_tool_names_list: str,
+    param_check_instructions: str
+) -> str:
+    """Build presence evaluation body when data must be extracted from chat."""
+    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else "[tool_identifier]"
+    
+    return f"""**Evaluation Instructions:**
+
+The specification requires these tools (ORDER DOESN'T MATTER):
+{required_tool_list}
+
+**Your task:**
+
+1. **Find all tool calls in the chat session**
+   - Scan through and identify all tool calls
+   - Order doesn't matter for this evaluation
+   
+2. **Check presence**
+   - The following required tools MUST be called at least once:
+{required_tool_names_bullets}
+   - Check if each of these exact tool identifiers appears in the chat session
+   - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
+   
+3. **Check counts** (if limits specified)
+   - Are call counts within min/max limits?
+   - Are optional tools within limits (if any)?{param_check_instructions}
+   
+4. **Check prohibitions** (if any)
+   - Were any prohibited tools called?
+
+5. **Final result**
+   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
+   - Violated any limit → FAIL
+   - Called prohibited tool → FAIL
+   - Wrong or missing parameters → FAIL
+   - Otherwise → PASS
+
+**Your response format (2 lines only):**
+RESULT: [PASS or FAIL]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+"""
 
 
 # =============================================================================
@@ -184,267 +582,44 @@ def build_tool_call_evaluation_prompt(
         )
     
     tool_calls = criterion.tool_calls
+    has_preparsed_data = tool_call_sequence is not None
     
-    # Build required tools section with parameters
-    required_section = ""
-    if tool_calls.required:
-        required_lines = []
-        for tool in tool_calls.required:
-            min_max = []
-            if tool.min_calls is not None:
-                min_max.append(f"min: {tool.min_calls}")
-            if tool.max_calls is not None:
-                min_max.append(f"max: {tool.max_calls}")
-            constraint = f" ({', '.join(min_max)})" if min_max else ""
-            
-            # Add parameter requirements if specified
-            params_info = ""
-            if tool.params:
-                params_list = [f"{k}: {v}" for k, v in tool.params.items()]
-                params_info = f" with parameters: {', '.join(params_list)}"
-            
-            required_lines.append(f"  - {tool.name}{constraint}{params_info}")
-        required_section = "**Required Tools:**\n" + "\n".join(required_lines)
+    # Build tool specification sections
+    required_section = _build_required_tools_section(tool_calls)
+    optional_section = _build_optional_tools_section(tool_calls)
+    prohibited_section = _build_prohibited_tools_section(tool_calls)
     
-    # Build optional tools section
-    optional_section = ""
-    if tool_calls.optional:
-        optional_lines = []
-        for tool in tool_calls.optional:
-            max_constraint = f" (max: {tool.max_calls})" if tool.max_calls is not None else ""
-            optional_lines.append(f"  - {tool.name}{max_constraint}")
-        optional_section = "\n\n**Optional Tools:**\n" + "\n".join(optional_lines)
+    # Build required tool lists in various formats
+    required_tool_list_numbered, required_tool_list, required_tool_names_list, required_tool_names_bullets = _build_required_tool_lists(tool_calls)
     
-    # Build prohibited tools section
-    prohibited_section = ""
-    if tool_calls.prohibited:
-        prohibited_lines = [f"  - {tool.name}" for tool in tool_calls.prohibited]
-        prohibited_section = "\n\n**Prohibited Tools:**\n" + "\n".join(prohibited_lines)
+    # Build parameter checking instructions
+    param_check_instructions = _build_param_check_instructions(tool_calls)
     
-    # Build numbered list of required tools for absolute clarity
-    required_tool_list = ""
-    required_tool_list_numbered = ""
-    if tool_calls.required:
-        tool_items = []
-        tool_items_numbered = []
-        for i, tool in enumerate(tool_calls.required, 1):
-            tool_items.append(f"REQUIRED TOOL #{i}: {tool.name}")
-            tool_items_numbered.append(f"{i}. {tool.name}")
-        required_tool_list = "\n".join(tool_items)
-        required_tool_list_numbered = "\n".join(tool_items_numbered)
+    # Build actual calls section if pre-parsed data available
+    actual_calls_section = _build_actual_calls_section(tool_call_sequence, parsed_tool_calls)
     
-    # Build explicit tool name lists for injection into instructions
-    required_tool_names = [tool.name for tool in tool_calls.required] if tool_calls.required else []
-    required_tool_names_list = ", ".join(required_tool_names) if required_tool_names else ""
-    required_tool_names_bullets = "\n".join([f"   - {name}" for name in required_tool_names]) if required_tool_names else ""
-    
-    # Build parameter checking instructions if any tools have params specified
-    has_params_to_check = any(tool.params for tool in tool_calls.required) if tool_calls.required else False
-    param_check_instructions = ""
-    if has_params_to_check:
-        param_check_instructions = """
-   
-   **Check parameters** (CRITICAL)
-   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values
-   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)
-   - Parameter names must match exactly (case-sensitive)
-   - Parameter values must match exactly (no partial matches, no "close enough")
-   - Missing parameters = FAIL
-   - Wrong parameter values = FAIL
-   - Extra parameters are OK (only required ones must match)
-   - If ANY required parameter is missing or wrong → FAIL"""
-    
-    # If pre-parsed tool sequence is provided, use it directly
-    # Also include parameters if available
-    actual_calls_section = ""
-    if tool_call_sequence is not None:
-        call_lines = []
-        for i, name in enumerate(tool_call_sequence, 1):
-            # Try to find parameters for this tool call
-            params_str = ""
-            if parsed_tool_calls:
-                # Find matching tool call by name (handle both full names and function names)
-                for tc in parsed_tool_calls:
-                    # Match if: full_name matches, function matches, or name matches function
-                    if (tc.full_name == name or 
-                        tc.function == name or 
-                        name.endswith(f".{tc.function}") or 
-                        tc.full_name.endswith(f".{name}")):
-                        if tc.parameters:
-                            params_list = []
-                            for k, v in tc.parameters.items():
-                                if v is None:
-                                    params_list.append(f"{k}: null")
-                                else:
-                                    params_list.append(f"{k}: {v}")
-                            if params_list:
-                                params_str = f" (parameters: {', '.join(params_list)})"
-                        break
-            
-            call_lines.append(f"{i}. {name}{params_str}")
-        
-        actual_calls_section = f"""
-**EXTRACTED TOOL CALLS (in order):**
-{chr(10).join(call_lines)}
-"""
-    
-    # Build evaluation instructions based on respect_order setting
+    # Build evaluation body based on order sensitivity and data availability
     if tool_calls.respect_order:
-        if tool_call_sequence is not None:
-            # With pre-parsed data: direct comparison
-            evaluation_body = f"""**Evaluation Instructions:**
-
-Expected order:
-{required_tool_list_numbered}
-
-The specification requires these tools IN THIS EXACT ORDER:
-{required_tool_list}
-{actual_calls_section}
-
-**Your task:**
-
-1. **Compare the extracted calls against required order**
-   - Position 1: Does extracted call #1 match REQUIRED TOOL #1?
-   - Position 2: Does extracted call #2 match REQUIRED TOOL #2?
-   - Continue for all positions
-   - If ANY position doesn't match → ORDER IS WRONG → FAIL
-   
-2. **Check other requirements**
-   - All required tools present? The required tools are:
-{required_tool_names_bullets}
-   - Call counts within limits (if specified)?
-   - Optional tools within limits (if any)?
-   - No prohibited tools called (if any)?{param_check_instructions}
-
-3. **Final result**
-   - Order wrong → FAIL
-   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Wrong or missing parameters → FAIL
-   - Otherwise → PASS
-
-**Your response format (2 lines only):**
-RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Copy the exact tool identifier from the list above, such as "{required_tool_names[0] if required_tool_names else ''}" or another tool from the list.]
-"""
-        else:
-            # Without pre-parsed data: must extract first
-            evaluation_body = f"""**Evaluation Instructions:**
-
-Expected order:
-{required_tool_list_numbered}
-
-The specification requires these tools IN THIS EXACT ORDER:
-{required_tool_list}
-
-**Your task:**
-
-1. **Find the tool calls in the chat session**
-   - Scan through the chat session and identify all tool calls
-   - Extract the tool names in the order they were called
-   
-2. **Write down the actual order you found**
-   - List them: "First tool called: <actual_tool_name>, Second tool called: <actual_tool_name>, ..."
-   - IMPORTANT: Use the actual tool names you found in the chat session, not placeholders
-   
-3. **Compare against the required order**
-   - Position 1: Does first tool called = REQUIRED TOOL #1? (MUST match exactly)
-   - Position 2: Does second tool called = REQUIRED TOOL #2? (MUST match exactly)
-   - Continue for all positions
-   - If ANY position doesn't match → ORDER IS WRONG → FAIL
-   
-4. **Check other requirements**
-   - All required tools present? The required tools are:
-{required_tool_names_bullets}
-   - Call counts within limits (if specified)?
-   - Optional tools within limits (if any)?
-   - No prohibited tools called (if any)?{param_check_instructions}
-
-5. **Final result**
-   - Order wrong → FAIL
-   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Wrong or missing parameters → FAIL
-   - Otherwise → PASS
-
-**Your response format (2 lines only):**
-RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. Use the exact tool name, not a placeholder or the word "name".]
-"""
-        
+        evaluation_body = _build_order_evaluation_body(
+            tool_calls,
+            required_tool_list_numbered,
+            required_tool_list,
+            required_tool_names_bullets,
+            required_tool_names_list,
+            param_check_instructions,
+            actual_calls_section,
+            has_preparsed_data
+        )
     else:
-        if tool_call_sequence is not None:
-            # With pre-parsed data: direct presence check
-            evaluation_body = f"""**Evaluation Instructions:**
-
-The specification requires these tools (ORDER DOESN'T MATTER):
-{required_tool_list}
-{actual_calls_section}
-
-**Your task:**
-
-1. **Check presence**
-   - The following required tools MUST be present in the extracted calls:
-{required_tool_names_bullets}
-   - Check if each of these exact tool identifiers appears in the extracted calls list above
-   - Order doesn't matter
-   - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
-   
-2. **Check counts** (if limits specified)
-   - Are call counts within min/max limits?
-   - Are optional tools within limits (if any)?{param_check_instructions}
-   
-3. **Check prohibitions** (if any)
-   - Were any prohibited tools called?
-
-4. **Final result**
-   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Called prohibited tool → FAIL
-   - Wrong or missing parameters → FAIL
-   - Otherwise → PASS
-
-**Your response format (2 lines only):**
-RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {required_tool_names[0] if required_tool_names else 'the first tool'} was not called, write: "Required tool {required_tool_names[0] if required_tool_names else '[tool_identifier]'} was not called."]
-"""
-        else:
-            # Without pre-parsed data: must extract first
-            evaluation_body = f"""**Evaluation Instructions:**
-
-The specification requires these tools (ORDER DOESN'T MATTER):
-{required_tool_list}
-
-**Your task:**
-
-1. **Find all tool calls in the chat session**
-   - Scan through and identify all tool calls
-   - Order doesn't matter for this evaluation
-   
-2. **Check presence**
-   - The following required tools MUST be called at least once:
-{required_tool_names_bullets}
-   - Check if each of these exact tool identifiers appears in the chat session
-   - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
-   
-3. **Check counts** (if limits specified)
-   - Are call counts within min/max limits?
-   - Are optional tools within limits (if any)?{param_check_instructions}
-   
-4. **Check prohibitions** (if any)
-   - Were any prohibited tools called?
-
-5. **Final result**
-   - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL
-   - Called prohibited tool → FAIL
-   - Wrong or missing parameters → FAIL
-   - Otherwise → PASS
-
-**Your response format (2 lines only):**
-RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}. For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual. For example, if {required_tool_names[0] if required_tool_names else 'the first tool'} was not called, write: "Required tool {required_tool_names[0] if required_tool_names else '[tool_identifier]'} was not called."]
-"""
+        evaluation_body = _build_presence_evaluation_body(
+            tool_calls,
+            required_tool_list,
+            required_tool_names_bullets,
+            required_tool_names_list,
+            param_check_instructions,
+            actual_calls_section,
+            has_preparsed_data
+        )
     
     return f"""You are an expert at evaluating tool usage in chat sessions.
 
@@ -539,10 +714,11 @@ def build_dimension_generation_prompt(
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     
-    if num_dimensions is None:
-        count_instruction = "Generate an appropriate number of evaluation dimensions (between 3 and 10)"
-    else:
-        count_instruction = f"Generate {num_dimensions} evaluation dimensions"
+    count_instruction = (
+        f"Generate {num_dimensions} evaluation dimensions"
+        if num_dimensions is not None
+        else "Generate an appropriate number of evaluation dimensions (between 3 and 10)"
+    )
     
     return f"""Given the following Question and Answer pair, {count_instruction} for assessing answer quality.
 
@@ -621,16 +797,17 @@ def build_criteria_generation_prompt(
         for d in dimensions
     ])
     
-    category_guidance = ""
-    if category_hints:
-        category_guidance = f"\n\nPreferred categories to use: {', '.join(category_hints)}"
-    else:
-        category_guidance = "\n\nSuggested categories: Output, Reasoning, Completeness, Accuracy, Clarity"
+    category_guidance = (
+        f"\n\nPreferred categories to use: {', '.join(category_hints)}"
+        if category_hints
+        else "\n\nSuggested categories: Output, Reasoning, Completeness, Accuracy, Clarity"
+    )
     
-    if num_criteria is None:
-        count_instruction = "generate an appropriate number of specific evaluation criteria (between 5 and 10, as many as needed to thoroughly evaluate the answer)"
-    else:
-        count_instruction = f"generate {num_criteria} specific evaluation criteria"
+    count_instruction = (
+        f"generate {num_criteria} specific evaluation criteria"
+        if num_criteria is not None
+        else "generate an appropriate number of specific evaluation criteria (between 5 and 10, as many as needed to thoroughly evaluate the answer)"
+    )
     
     return f"""Given the following Question, Answer, and Dimensions, {count_instruction}.
 
@@ -715,17 +892,17 @@ def build_refine_rubric_prompt(
     
     rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
     
-    feedback_section = ""
-    if feedback:
-        feedback_section = f"\n\nSpecific Feedback:\n{feedback}"
-    else:
-        feedback_section = (
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}"
+        if feedback
+        else (
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable\n"
             "- Improving descriptions for clarity\n"
             "- Ensuring proper weight distribution\n"
             "- Adding detail where criteria are too vague"
         )
+    )
     
     return f"""Refine the following evaluation rubric to improve its quality.
 
@@ -774,10 +951,11 @@ def build_chat_dimension_generation_prompt(
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     
-    if num_dimensions is None:
-        count_instruction = "Generate an appropriate number of evaluation dimensions (between 5 and 10, as many as needed)"
-    else:
-        count_instruction = f"Generate {num_dimensions} evaluation dimensions"
+    count_instruction = (
+        f"Generate {num_dimensions} evaluation dimensions"
+        if num_dimensions is not None
+        else "Generate an appropriate number of evaluation dimensions (between 5 and 10, as many as needed)"
+    )
     
     return f"""Given the following chat session, {count_instruction} for assessing the assistant's performance.
 
@@ -873,16 +1051,17 @@ def build_chat_criteria_generation_prompt(
         for d in dimensions
     ])
     
-    category_guidance = ""
-    if category_hints:
-        category_guidance = f"\n\nPreferred categories to use: {', '.join(category_hints)}"
-    else:
-        category_guidance = "\n\nSuggested categories: Tools, Output, Reasoning, Completeness, Accuracy"
+    category_guidance = (
+        f"\n\nPreferred categories to use: {', '.join(category_hints)}"
+        if category_hints
+        else "\n\nSuggested categories: Tools, Output, Reasoning, Completeness, Accuracy"
+    )
     
-    if num_criteria is None:
-        count_instruction = "generate an appropriate number of specific evaluation criteria (between 7 and 10, create enough to check all important aspects including each tool call and each key fact in the response)"
-    else:
-        count_instruction = f"generate {num_criteria} specific evaluation criteria"
+    count_instruction = (
+        f"generate {num_criteria} specific evaluation criteria"
+        if num_criteria is not None
+        else "generate an appropriate number of specific evaluation criteria (between 7 and 10, create enough to check all important aspects including each tool call and each key fact in the response)"
+    )
     
     return f"""Given the following chat session and dimensions, {count_instruction}.
 
@@ -979,4 +1158,3 @@ Return ONLY a JSON array of criterion objects. Example format:
 Note: 
 - Extract actual tool names from the chat session above when creating tool_calls specifications
 - Multiple criteria can reference the same dimension (e.g., all factual checks use "factual_accuracy")"""
-
