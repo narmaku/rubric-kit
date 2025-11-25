@@ -4,6 +4,7 @@ import pytest
 import tempfile
 import os
 import yaml
+import json
 from unittest.mock import patch, Mock
 
 from rubric_kit.schema import Rubric, Dimension, Criterion
@@ -45,6 +46,71 @@ criteria:
 
 
 @pytest.fixture
+def sample_evaluation_yaml():
+    """Create a sample evaluation YAML file for export tests (new self-contained format)."""
+    data = {
+        "results": [
+            {
+                "criterion_name": "fact_1",
+                "category": "Output",
+                "dimension": "factual_correctness",
+                "result": "pass",
+                "score": 3,
+                "max_score": 3,
+                "reason": "Correct"
+            }
+        ],
+        "summary": {
+            "total_score": 3,
+            "max_score": 3,
+            "percentage": 100.0
+        },
+        "rubric": {
+            "dimensions": [
+                {
+                    "name": "factual_correctness",
+                    "description": "Test correctness",
+                    "grading_type": "binary",
+                    "scores": None,
+                    "pass_above": None
+                }
+            ],
+            "criteria": [
+                {
+                    "name": "fact_1",
+                    "category": "Output",
+                    "dimension": "factual_correctness",
+                    "criterion": "Check fact 1",
+                    "weight": 3,
+                    "tool_calls": None
+                }
+            ]
+        },
+        "judge_panel": {
+            "judges": [{"name": "default", "model": "gpt-4", "base_url": None}],
+            "execution": {"mode": "sequential", "batch_size": 2, "timeout": 30},
+            "consensus": {"mode": "unanimous", "threshold": 1, "on_no_consensus": "fail"}
+        },
+        "input": {
+            "type": "chat_session",
+            "source_file": "test.txt"
+        },
+        "metadata": {
+            "timestamp": "2024-01-01T12:00:00",
+            "rubric_source_file": "test.yaml",
+            "judge_panel_source_file": None
+        }
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.dump(data, f)
+        temp_path = f.name
+    
+    yield temp_path
+    os.unlink(temp_path)
+
+
+@pytest.fixture
 def sample_chat_session_file():
     """Create a sample chat session file."""
     chat_content = """User: Test question?
@@ -78,7 +144,7 @@ class TestEvaluateCommand:
     @patch('rubric_kit.main.evaluate_rubric_with_panel')
     @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
     def test_evaluate_command(self, mock_eval_llm, sample_rubric_file, sample_chat_session_file, capsys):
-        """Test the evaluate subcommand with LLM judge."""
+        """Test the evaluate subcommand with LLM judge - always outputs YAML."""
         from rubric_kit.main import main
         
         # Mock LLM evaluations
@@ -87,7 +153,7 @@ class TestEvaluateCommand:
             "useful_1": {"type": "score", "score": 3}
         }
         
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
             output_path = f.name
         
         try:
@@ -100,8 +166,14 @@ class TestEvaluateCommand:
             # Should return 0 for success
             assert result == 0
             
-            # Check that output file was created
+            # Check that output file was created (YAML)
             assert os.path.exists(output_path)
+            
+            # Verify it's valid YAML with expected structure
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            assert "results" in data
+            assert "metadata" in data
             
             # Check that table was printed
             captured = capsys.readouterr()
@@ -114,6 +186,123 @@ class TestEvaluateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
     
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch('rubric_kit.main.export_evaluation_pdf')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_evaluate_with_report(self, mock_pdf, mock_eval_llm, sample_rubric_file, sample_chat_session_file):
+        """Test evaluate subcommand with --report flag generates PDF."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.pdf', delete=False) as f:
+            pdf_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, 
+                       '--rubric-file', sample_rubric_file, '--output-file', output_path,
+                       '--report', pdf_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert mock_pdf.called
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            if os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_evaluate_with_report_title(self, mock_eval_llm, sample_rubric_file, sample_chat_session_file):
+        """Test evaluate subcommand with --report-title stores title in metadata."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, 
+                       '--rubric-file', sample_rubric_file, '--output-file', output_path,
+                       '--report-title', 'Q1 2025 Evaluation']
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify report title is in metadata
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            assert data["metadata"]["report_title"] == "Q1 2025 Evaluation"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_evaluate_output_is_self_contained(self, mock_eval_llm, sample_rubric_file, sample_chat_session_file):
+        """Test evaluate subcommand produces self-contained output with rubric and judge_panel at top level."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, 
+                       '--rubric-file', sample_rubric_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify self-contained structure
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Rubric at top level (not in metadata)
+            assert "rubric" in data
+            assert "dimensions" in data["rubric"]
+            assert "criteria" in data["rubric"]
+            assert len(data["rubric"]["dimensions"]) == 2
+            assert len(data["rubric"]["criteria"]) == 2
+            
+            # Judge panel at top level
+            assert "judge_panel" in data
+            assert "judges" in data["judge_panel"]
+            assert "execution" in data["judge_panel"]
+            assert "consensus" in data["judge_panel"]
+            
+            # Input section
+            assert "input" in data
+            assert data["input"]["type"] == "chat_session"
+            
+            # Summary section
+            assert "summary" in data
+            assert "total_score" in data["summary"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
     def test_evaluate_with_missing_api_key(self, sample_rubric_file, sample_chat_session_file):
         """Test evaluate subcommand without API key."""
         from rubric_kit.main import main
@@ -121,7 +310,7 @@ class TestEvaluateCommand:
         
         # Ensure no API key in environment
         with patch.dict(os.environ, {}, clear=True):
-            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, '--rubric-file', sample_rubric_file, '--output-file', 'output.csv']
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, '--rubric-file', sample_rubric_file, '--output-file', 'output.yaml']
             
             result = main()
             
@@ -134,7 +323,7 @@ class TestEvaluateCommand:
         import sys
         
         with patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'}):
-            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', 'nonexistent.txt', '--rubric-file', 'nonexistent.yaml', '--output-file', 'output.csv']
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', 'nonexistent.txt', '--rubric-file', 'nonexistent.yaml', '--output-file', 'output.yaml']
             
             result = main()
             
@@ -401,6 +590,190 @@ class TestRefineCommand:
         finally:
             if os.path.exists(output_path):
                 os.unlink(output_path)
+
+
+class TestRerunCommand:
+    """Test the 'rerun' subcommand."""
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_rerun_with_embedded_input(self, mock_eval_llm, sample_evaluation_yaml):
+        """Test rerun subcommand uses settings from self-contained YAML."""
+        from rubric_kit.main import main
+        import sys
+        
+        # Add embedded input content to the fixture
+        with open(sample_evaluation_yaml, 'r') as f:
+            data = yaml.safe_load(f)
+        data["input"]["content"] = "User: Test question?\nAssistant: Test answer."
+        with open(sample_evaluation_yaml, 'w') as f:
+            yaml.dump(data, f)
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'rerun', sample_evaluation_yaml, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(output_path)
+            
+            # Verify output has same structure
+            with open(output_path, 'r') as f:
+                new_data = yaml.safe_load(f)
+            
+            assert "rubric" in new_data
+            assert "judge_panel" in new_data
+            assert "results" in new_data
+            assert new_data["metadata"].get("rerun_from") == sample_evaluation_yaml
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_rerun_with_new_input(self, mock_eval_llm, sample_evaluation_yaml, sample_chat_session_file):
+        """Test rerun with new input file overrides embedded/original input."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'rerun', sample_evaluation_yaml, 
+                       '--from-chat-session', sample_chat_session_file,
+                       '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert mock_eval_llm.called
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    def test_rerun_missing_input_file(self):
+        """Test rerun subcommand with missing input file."""
+        from rubric_kit.main import main
+        import sys
+        
+        with patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'}):
+            sys.argv = ['rubric-kit', 'rerun', 'nonexistent.yaml', '--output-file', 'output.yaml']
+            
+            result = main()
+            
+            assert result != 0
+
+
+class TestExportCommand:
+    """Test the 'export' subcommand."""
+    
+    def test_export_to_pdf(self, sample_evaluation_yaml):
+        """Test export subcommand with --format pdf."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.pdf', delete=False) as f:
+            pdf_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'pdf', '--output', pdf_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(pdf_path)
+            assert os.path.getsize(pdf_path) > 0
+        finally:
+            if os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+    
+    def test_export_to_csv(self, sample_evaluation_yaml):
+        """Test export subcommand with --format csv."""
+        from rubric_kit.main import main
+        import sys
+        import csv
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            csv_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'csv', '--output', csv_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(csv_path)
+            
+            # Verify CSV content
+            with open(csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+            assert len(rows) >= 1
+            assert rows[0]["criterion_name"] == "fact_1"
+        finally:
+            if os.path.exists(csv_path):
+                os.unlink(csv_path)
+    
+    def test_export_to_json(self, sample_evaluation_yaml):
+        """Test export subcommand with --format json."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'json', '--output', json_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(json_path)
+            
+            # Verify JSON content
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            assert "results" in data
+            assert len(data["results"]) >= 1
+        finally:
+            if os.path.exists(json_path):
+                os.unlink(json_path)
+    
+    def test_export_missing_input_file(self):
+        """Test export subcommand with missing input file."""
+        from rubric_kit.main import main
+        import sys
+        
+        sys.argv = ['rubric-kit', 'export', 'nonexistent.yaml', '--format', 'pdf', '--output', 'output.pdf']
+        
+        result = main()
+        
+        assert result != 0
+    
+    def test_export_requires_format(self, sample_evaluation_yaml):
+        """Test export subcommand requires --format argument."""
+        from rubric_kit.main import main
+        import sys
+        
+        sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--output', 'output.pdf']
+        
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        
+        # Should exit with error due to missing required argument
+        assert exc_info.value.code != 0
 
 
 def test_cli_help():

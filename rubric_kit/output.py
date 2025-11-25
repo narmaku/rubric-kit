@@ -154,12 +154,19 @@ def write_csv(
             writer.writerow(summary_row)
 
 
-def _prepare_structured_output(results: List[Dict[str, Any]], include_summary: bool) -> Dict[str, Any]:
-    """Prepare output data structure with optional summary."""
+def _prepare_structured_output(
+    results: List[Dict[str, Any]], 
+    include_summary: bool,
+    metadata: Dict[str, Any] | None = None
+) -> Dict[str, Any]:
+    """Prepare output data structure with optional summary and metadata."""
     output_data = {"results": results}
     
     if include_summary:
         output_data["summary"] = _calculate_summary(results)
+    
+    if metadata:
+        output_data["metadata"] = metadata
     
     return output_data
 
@@ -167,7 +174,8 @@ def _prepare_structured_output(results: List[Dict[str, Any]], include_summary: b
 def write_json(
     results: List[Dict[str, Any]], 
     output_path: str, 
-    include_summary: bool = False
+    include_summary: bool = False,
+    metadata: Dict[str, Any] | None = None
 ) -> None:
     """
     Write evaluation results to a JSON file.
@@ -176,8 +184,9 @@ def write_json(
         results: List of evaluation results
         output_path: Path to output JSON file
         include_summary: Whether to include summary in output
+        metadata: Optional metadata dictionary (rubric_file, timestamp, etc.)
     """
-    output_data = _prepare_structured_output(results, include_summary)
+    output_data = _prepare_structured_output(results, include_summary, metadata)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(output_data, f, indent=2, ensure_ascii=False)
@@ -186,7 +195,8 @@ def write_json(
 def write_yaml(
     results: List[Dict[str, Any]], 
     output_path: str, 
-    include_summary: bool = False
+    include_summary: bool = False,
+    metadata: Dict[str, Any] | None = None
 ) -> None:
     """
     Write evaluation results to a YAML file.
@@ -195,8 +205,9 @@ def write_yaml(
         results: List of evaluation results
         output_path: Path to output YAML file
         include_summary: Whether to include summary in output
+        metadata: Optional metadata dictionary (rubric_file, timestamp, etc.)
     """
-    output_data = _prepare_structured_output(results, include_summary)
+    output_data = _prepare_structured_output(results, include_summary, metadata)
     
     with open(output_path, 'w', encoding='utf-8') as f:
         yaml.dump(output_data, f, 
@@ -223,7 +234,8 @@ def write_results(
     results: List[Dict[str, Any]], 
     output_path: str, 
     format: str | None = None,
-    include_summary: bool = False
+    include_summary: bool = False,
+    metadata: Dict[str, Any] | None = None
 ) -> None:
     """
     Write evaluation results to a file in the specified format.
@@ -233,6 +245,7 @@ def write_results(
         output_path: Path to output file
         format: Output format ('csv', 'json', 'yaml'). If None, detected from file extension.
         include_summary: Whether to include summary in output
+        metadata: Optional metadata dictionary (rubric_file, timestamp, etc.)
     """
     if format is None:
         format = detect_format_from_extension(output_path)
@@ -249,7 +262,11 @@ def write_results(
     if writer is None:
         raise ValueError(f"Unsupported format: {format}. Supported formats: csv, json, yaml")
     
-    writer(results, output_path, include_summary=include_summary)
+    # CSV doesn't support metadata (flat format), only JSON/YAML
+    if format == 'csv':
+        writer(results, output_path, include_summary=include_summary)
+    else:
+        writer(results, output_path, include_summary=include_summary, metadata=metadata)
 
 
 def _format_consensus_indicator(consensus_reached: bool) -> str:
@@ -333,4 +350,51 @@ def print_table(results: List[Dict[str, Any]], include_summary: bool = True) -> 
     """
     table = format_table(results, include_summary=include_summary)
     print(table)
+
+
+def _load_yaml_data(input_path: str) -> Dict[str, Any]:
+    """
+    Load data from a YAML file.
+    
+    Args:
+        input_path: Path to input YAML file
+        
+    Returns:
+        Dictionary with the loaded data
+    """
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Input file not found: {input_path}")
+    
+    with open(input_path, 'r', encoding='utf-8') as f:
+        return yaml.safe_load(f)
+
+
+def convert_yaml_to_csv(input_path: str, output_path: str) -> None:
+    """
+    Convert evaluation results from YAML to CSV format.
+    
+    Args:
+        input_path: Path to input YAML file
+        output_path: Path to output CSV file
+    """
+    data = _load_yaml_data(input_path)
+    results = data.get("results", [])
+    
+    # Include summary if present
+    include_summary = "summary" in data
+    write_csv(results, output_path, include_summary=include_summary)
+
+
+def convert_yaml_to_json(input_path: str, output_path: str) -> None:
+    """
+    Convert evaluation results from YAML to JSON format.
+    
+    Args:
+        input_path: Path to input YAML file
+        output_path: Path to output JSON file
+    """
+    data = _load_yaml_data(input_path)
+    
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 

@@ -394,3 +394,185 @@ def test_write_results_invalid_format(sample_results):
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
+
+def test_write_json_with_metadata(sample_results):
+    """Test that JSON includes metadata when provided."""
+    from rubric_kit.output import write_json
+    
+    metadata = {
+        "rubric_file": "test_rubric.yaml",
+        "input_file": "test_input.txt",
+        "timestamp": "2024-01-01T12:00:00",
+        "judge_panel": {
+            "judges": ["judge1", "judge2"],
+            "consensus_mode": "majority"
+        }
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_json(sample_results, temp_path, metadata=metadata)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "metadata" in data
+        assert data["metadata"]["rubric_file"] == "test_rubric.yaml"
+        assert data["metadata"]["input_file"] == "test_input.txt"
+        assert data["metadata"]["timestamp"] == "2024-01-01T12:00:00"
+        assert "judge_panel" in data["metadata"]
+        assert data["results"] == sample_results
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_yaml_with_metadata(sample_results):
+    """Test that YAML includes metadata when provided."""
+    from rubric_kit.output import write_yaml
+    
+    metadata = {
+        "rubric_file": "test_rubric.yaml",
+        "input_file": "test_input.txt",
+        "timestamp": "2024-01-01T12:00:00"
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_yaml(sample_results, temp_path, metadata=metadata)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        assert "metadata" in data
+        assert data["metadata"]["rubric_file"] == "test_rubric.yaml"
+        assert data["metadata"]["input_file"] == "test_input.txt"
+        assert data["results"] == sample_results
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_json_without_metadata(sample_results):
+    """Test that JSON works without metadata (backward compatibility)."""
+    from rubric_kit.output import write_json
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_json(sample_results, temp_path)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Should not have metadata key if not provided
+        assert "metadata" not in data
+        assert "results" in data
+    finally:
+        os.unlink(temp_path)
+
+
+def test_write_results_with_metadata(sample_results):
+    """Test write_results function passes metadata to writers."""
+    from rubric_kit.output import write_results
+    
+    metadata = {
+        "rubric_file": "test_rubric.yaml",
+        "timestamp": "2024-01-01T12:00:00"
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        temp_path = f.name
+    
+    try:
+        write_results(sample_results, temp_path, metadata=metadata)
+        
+        with open(temp_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "metadata" in data
+        assert data["metadata"]["rubric_file"] == "test_rubric.yaml"
+    finally:
+        os.unlink(temp_path)
+
+
+def test_convert_yaml_to_csv(sample_results):
+    """Test converting YAML evaluation results to CSV."""
+    from rubric_kit.output import convert_yaml_to_csv
+    
+    # Create source YAML file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({"results": sample_results, "summary": {"criterion_name": "TOTAL", "score": 6}}, f)
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        csv_path = f.name
+    
+    try:
+        convert_yaml_to_csv(yaml_path, csv_path)
+        
+        # Verify CSV was created
+        assert os.path.exists(csv_path)
+        
+        # Read and verify content
+        with open(csv_path, 'r') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+        
+        assert len(rows) >= 3  # At least 3 results
+        assert rows[0]["criterion_name"] == "fact_1"
+    finally:
+        os.unlink(yaml_path)
+        os.unlink(csv_path)
+
+
+def test_convert_yaml_to_json(sample_results):
+    """Test converting YAML evaluation results to JSON."""
+    from rubric_kit.output import convert_yaml_to_json
+    
+    # Create source YAML file
+    metadata = {"rubric_file": "test.yaml", "timestamp": "2024-01-01T12:00:00"}
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({"results": sample_results, "metadata": metadata}, f)
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json_path = f.name
+    
+    try:
+        convert_yaml_to_json(yaml_path, json_path)
+        
+        # Verify JSON was created
+        assert os.path.exists(json_path)
+        
+        # Read and verify content
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        assert "results" in data
+        assert "metadata" in data
+        assert len(data["results"]) == 3
+        assert data["metadata"]["rubric_file"] == "test.yaml"
+    finally:
+        os.unlink(yaml_path)
+        os.unlink(json_path)
+
+
+def test_convert_yaml_to_csv_missing_file():
+    """Test convert_yaml_to_csv with missing input file."""
+    from rubric_kit.output import convert_yaml_to_csv
+    
+    with pytest.raises(FileNotFoundError):
+        convert_yaml_to_csv("nonexistent.yaml", "output.csv")
+
+
+def test_convert_yaml_to_json_missing_file():
+    """Test convert_yaml_to_json with missing input file."""
+    from rubric_kit.output import convert_yaml_to_json
+    
+    with pytest.raises(FileNotFoundError):
+        convert_yaml_to_json("nonexistent.yaml", "output.json")
+

@@ -12,10 +12,11 @@ Automatic rubric evaluation using LLM-as-a-Judge. Create, refine, and apply eval
 - **Schema Validation**: Pydantic-based validation for rubric YAML files
 - **Flexible Grading**: Support for binary (pass/fail) and score-based (1-N) grading
 - **Tool Call Validation**: Define required, optional, and prohibited tool calls
-- **CSV Export**: Export evaluation results to CSV with consensus metadata
+- **📄 PDF Reports**: Generate comprehensive PDF reports with charts, summaries, and rubric appendix
+- **📊 Export Formats**: Convert evaluation results to PDF, CSV, or JSON
 - **Pretty Tables**: Display results in formatted tables in the terminal
 - **OpenAI Compatible**: Works with any OpenAI-compatible endpoint
-- **Comprehensive Testing**: Full test coverage with pytest (100+ tests)
+- **Comprehensive Testing**: Full test coverage with pytest (200+ tests)
 - **Customizable Prompts & LLM Configs**: All prompts and LLM parameters centralized for easy modification
 - **Specialized Tool Call Evaluation**: Dedicated prompts for parsing and validating tool usage patterns
 
@@ -33,10 +34,12 @@ pip install -r requirements.txt
 
 ## Usage
 
-Rubric Kit provides three main commands:
-- `generate`: Create a new rubric from a Q&A pair
-- `evaluate`: Evaluate a chat session against a rubric
+Rubric Kit provides five main commands:
+- `generate`: Create a new rubric from a Q&A pair or chat session
+- `evaluate`: Evaluate a chat session against a rubric (outputs self-contained YAML)
 - `refine`: Improve an existing rubric
+- `export`: Convert evaluation YAML to PDF, CSV, or JSON format
+- `rerun`: Re-evaluate using settings from a previous self-contained output
 
 ### Generate a Rubric
 
@@ -84,19 +87,20 @@ context: Testing geography knowledge  # optional
 
 ### Evaluate a Chat Session
 
-Evaluate a chat session against an existing rubric:
+Evaluate a chat session against an existing rubric. The evaluation **always outputs a YAML file** (the source of truth artifact).
 
 ```bash
-# Basic usage
-rubric-kit evaluate chat_session.txt rubric.yaml results.csv
+# Basic usage (always outputs YAML)
+rubric-kit evaluate --from-chat-session chat_session.txt --rubric-file rubric.yaml --output-file results.yaml
+
+# With PDF report generation
+rubric-kit evaluate --from-chat-session chat.txt --rubric-file rubric.yaml --output-file output.yaml --report report.pdf
+
+# With custom report title
+rubric-kit evaluate --from-qna qna.yaml --rubric-file rubric.yaml --output-file output.yaml --report report.pdf --report-title "Q1 2025 Evaluation"
 
 # With custom model
-rubric-kit evaluate chat.txt rubric.yaml output.csv --model gpt-4-turbo
-
-# With custom OpenAI-compatible endpoint
-rubric-kit evaluate chat.txt rubric.yaml output.csv \
-  --model gpt-4 \
-  --base-url https://your-endpoint.com/v1
+rubric-kit evaluate --from-chat-session chat.txt --rubric-file rubric.yaml --output-file output.yaml --model gpt-4-turbo
 ```
 
 **Judge Panel Configuration:**
@@ -161,9 +165,15 @@ rubric-kit evaluate chat.txt rubric.yaml output.csv \
 ```
 
 **Evaluate Options:**
+- `--from-chat-session FILE`: Path to chat session file
+- `--from-qna FILE`: Path to Q&A YAML file (alternative to chat session)
+- `--rubric-file FILE`: Path to rubric YAML file
+- `--output-file FILE`: Path to output YAML file (self-contained)
+- `--report FILE`: Path to generate PDF report (optional)
+- `--report-title TEXT`: Custom title for the PDF report (optional)
+- `--include-input`: Embed input content in output YAML (for rerun capability)
 - `--judge-panel-config FILE`: Path to judge panel configuration YAML file
 - `--no-table`: Skip printing results table to console
-- `--include-summary`: Include summary row in CSV output
 - `--model MODEL`: Model to use for default single-judge panel (default: `gpt-4`)
 - `--api-key KEY`: OpenAI API key for default single-judge panel
 - `--base-url URL`: Custom API endpoint for default single-judge panel
@@ -192,6 +202,60 @@ rubric-kit refine rubric.yaml --model gpt-4-turbo
 - `--model MODEL`: Model to use (default: `gpt-4`)
 - `--api-key KEY`: OpenAI API key
 - `--base-url URL`: Custom API endpoint
+
+### Export Evaluation Results
+
+Convert the evaluation YAML file to other formats (PDF, CSV, or JSON):
+
+```bash
+# Export to PDF report
+rubric-kit export results.yaml --format pdf --output report.pdf
+
+# Export to CSV
+rubric-kit export results.yaml --format csv --output results.csv
+
+# Export to JSON
+rubric-kit export results.yaml --format json --output results.json
+```
+
+**Export Options:**
+- `--format TYPE`: Output format: `pdf`, `csv`, or `json` (required)
+- `--output FILE` / `-o FILE`: Path to output file (required)
+
+**PDF Report Contents:**
+- Custom title (from `--report-title` or metadata)
+- Executive summary with scores
+- LLM Judges Panel summary
+- Score distribution and dimension breakdown charts
+- Detailed results table
+- Rubric Appendix (Dimensions and Criteria)
+
+### Re-run Evaluation
+
+Re-evaluate using the rubric and judge panel settings from a previous self-contained output:
+
+```bash
+# Re-run with embedded input content (if --include-input was used originally)
+rubric-kit rerun results.yaml --output-file new_results.yaml
+
+# Re-run with new input (same rubric and judge settings)
+rubric-kit rerun results.yaml --from-chat-session new_chat.txt --output-file new_results.yaml
+
+# Re-run with new Q&A input
+rubric-kit rerun results.yaml --from-qna new_qna.yaml --output-file new_results.yaml
+
+# Re-run and generate PDF report
+rubric-kit rerun results.yaml --output-file new_results.yaml --report report.pdf
+```
+
+**Rerun Options:**
+- `--output-file FILE` / `-o FILE`: Path to output YAML file (required)
+- `--from-chat-session FILE`: Use new chat session input (optional)
+- `--from-qna FILE`: Use new Q&A input (optional)
+- `--include-input`: Include input content in output YAML
+- `--report FILE`: Generate PDF report (optional)
+- `--no-table`: Skip printing results table
+- `--api-key KEY`: API key for LLM calls
 
 ## Rubric YAML Format
 
@@ -269,35 +333,111 @@ The format is flexible - just write the chat session in a natural, readable way.
 
 ## Output Formats
 
+### Standardized Workflow
+
+1. **Run evaluation** → Always produces `output.yaml` (source of truth)
+2. **Use export command** → Convert to PDF, CSV, or JSON as needed
+
+```bash
+# Step 1: Evaluate and produce YAML
+rubric-kit evaluate --from-chat-session chat.txt --rubric-file rubric.yaml --output-file results.yaml
+
+# Step 2: Export to desired format
+rubric-kit export results.yaml --format pdf --output report.pdf
+rubric-kit export results.yaml --format csv --output results.csv
+```
+
 ### Console Table
 
 Results are displayed in a formatted table:
 
 ```
-+----------------------+------------+---------------------+------------+---------+-------------+--------------+
-| Criterion            | Category   | Dimension           | Result     | Score   | Max Score   | Reason       |
-+======================+============+=====================+============+=========+=============+==============+
-| sys_info_factual_1   | Output     | factual_correctness | pass       | 3       | 3           | Shows 8 CPUs |
-+----------------------+------------+---------------------+------------+---------+-------------+--------------+
-| useful_1             | Output     | usefulness          | pass       | 3       | 3           | (score desc) |
-+----------------------+------------+---------------------+------------+---------+-------------+--------------+
-| TOTAL                |            |                     | 100.0%     | 6       | 6           |              |
-+----------------------+------------+---------------------+------------+---------+-------------+--------------+
++----------------------+------------+---------------------+------------+---------+-----------+-----------+
+| Criterion            | Dimension  | Result              | Score      | Consensus| Agreement |
++======================+============+=====================+============+=========+===========+
+| sys_info_factual_1   | factual    | pass                | 3/3        | ✓       | 2/2       |
++----------------------+------------+---------------------+------------+---------+-----------+
+| useful_1             | usefulness | pass                | 3/3        | ✓       | 2/2       |
++----------------------+------------+---------------------+------------+---------+-----------+
+| TOTAL                |            | 100.0%              | 6/6        |         |           |
++----------------------+------------+---------------------+------------+---------+-----------+
 ```
 
 **Column Descriptions:**
 - **Result**: Shows `pass`/`fail` for binary criteria and score-based criteria with `pass_above` defined
 - **Score**: The actual score value (used for calculating total score)
-- **Reason**: Concise LLM-generated reasoning for the evaluation
+- **Consensus**: Whether judges reached consensus (✓ or ⚠)
+- **Agreement**: Number of agreeing judges out of total
 
-### CSV Output
+### YAML Output (Self-Contained)
 
-Results are exported to CSV with all evaluation details:
+The YAML file is the **self-contained source-of-truth artifact** containing everything needed for PDF generation, post-processing, sharing, and re-running:
 
-```csv
-criterion_name,category,dimension,criterion_text,result,score,max_score,score_description
-sys_info_factual_1,Output,factual_correctness,The response must...,pass,3,3,
-useful_1,Output,usefulness,from_scores,3,3,3,Very useful
+```yaml
+# Evaluation results
+results:
+  - criterion_name: sys_info_factual_1
+    category: Output
+    dimension: factual_correctness
+    result: pass
+    score: 3
+    max_score: 3
+    reason: The response correctly shows 8 CPUs
+
+# Summary scores
+summary:
+  total_score: 6
+  max_score: 6
+  percentage: 100.0
+
+# Full rubric (portable, self-contained)
+rubric:
+  dimensions:
+    - name: factual_correctness
+      description: "..."
+      grading_type: binary
+  criteria:
+    - name: sys_info_factual_1
+      category: Output
+      dimension: factual_correctness
+      criterion: "..."
+      weight: 3
+
+# Full judge panel config (portable, no API keys)
+judge_panel:
+  judges:
+    - name: primary
+      model: gpt-4
+      base_url: null
+  execution:
+    mode: sequential
+    batch_size: 2
+    timeout: 30
+  consensus:
+    mode: unanimous
+    threshold: 1
+    on_no_consensus: fail
+
+# Input reference (and optional content)
+input:
+  type: chat_session
+  source_file: "chat.txt"
+  content: "..."  # Only if --include-input was used
+
+# Metadata
+metadata:
+  timestamp: "2025-01-01T12:00:00"
+  report_title: "Q1 2025 Evaluation"
+  rubric_source_file: "rubric.yaml"
+```
+
+### CSV/JSON Export
+
+Use the `export` command to convert YAML to other formats:
+
+```bash
+rubric-kit export results.yaml --format csv --output results.csv
+rubric-kit export results.yaml --format json --output results.json
 ```
 
 ## Development
@@ -331,16 +471,18 @@ rubric-kit/
 │   ├── schema.py               # Pydantic models for validation
 │   ├── validator.py            # YAML validation logic
 │   ├── processor.py            # Score processing
-│   ├── output.py               # CSV and table output
+│   ├── output.py               # YAML, CSV, JSON and table output
+│   ├── pdf_export.py           # PDF report generation
 │   ├── prompts.py              # LLM prompt templates
 │   ├── llm_judge.py            # LLM-based criterion evaluation
 │   ├── generator.py            # Rubric generation from Q&A
 │   └── main.py                 # CLI entry point with subcommands
-├── tests/                      # Test suite (89 tests)
+├── tests/                      # Test suite (228 tests)
 │   ├── test_schema.py
 │   ├── test_validator.py
 │   ├── test_processor.py
 │   ├── test_output.py
+│   ├── test_pdf_export.py
 │   ├── test_prompts.py
 │   ├── test_llm_judge.py
 │   ├── test_generator.py
@@ -422,7 +564,7 @@ tool_calls:
 
 ## Complete Workflow Example
 
-Here's a complete workflow showing all three commands:
+Here's a complete workflow showing all five commands:
 
 ```bash
 # Set your API key
@@ -432,18 +574,28 @@ export OPENAI_API_KEY="your-api-key-here"
 echo "Q: What is the capital of France?" > qa.txt
 echo "A: The capital of France is Paris, known for the Eiffel Tower." >> qa.txt
 
-rubric-kit generate qa.txt geography_rubric.yaml \
+rubric-kit generate --from-qna qa.txt --output-file geography_rubric.yaml \
   --num-dimensions 3 \
   --num-criteria 5
 
 # 2. (Optional) Refine the generated rubric
-rubric-kit refine geography_rubric.yaml \
+rubric-kit refine --rubric-file geography_rubric.yaml \
   --feedback "Add more emphasis on accuracy and completeness"
 
-# 3. Use the rubric to evaluate a chat session
-rubric-kit evaluate example_chat_session.txt geography_rubric.yaml results.csv
+# 3. Evaluate a chat session (outputs self-contained YAML)
+rubric-kit evaluate --from-chat-session example_chat_session.txt \
+  --rubric-file geography_rubric.yaml \
+  --output-file results.yaml \
+  --include-input \
+  --report report.pdf \
+  --report-title "Geography Evaluation Report"
 
-# View results in terminal (automatic) or check results.csv
+# 4. Export to other formats as needed
+rubric-kit export results.yaml --format csv --output results.csv
+rubric-kit export results.yaml --format json --output results.json
+
+# 5. Re-run with different input (using same rubric & judge settings)
+rubric-kit rerun results.yaml --from-chat-session new_chat.txt --output-file new_results.yaml
 ```
 
 **Included Files:**
@@ -454,7 +606,7 @@ rubric-kit evaluate example_chat_session.txt geography_rubric.yaml results.csv
 **Try the included example:**
 ```bash
 export OPENAI_API_KEY="your-api-key-here"
-rubric-kit evaluate example_chat_session.txt example.yaml results.csv
+rubric-kit evaluate --from-chat-session example_chat_session.txt --rubric-file example.yaml --output-file results.yaml
 ```
 
 ## Customizing Prompts and LLM Behavior
