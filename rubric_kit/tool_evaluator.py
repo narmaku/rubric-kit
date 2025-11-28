@@ -12,6 +12,7 @@ Scoring Model (0-3 scale):
 - 0: Not called at all (for required tools)
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional, Literal
 from enum import Enum
@@ -612,7 +613,6 @@ def apply_param_validation_results(
 def parse_param_validation_response(response: str) -> List[Dict[str, Any]]:
     """Parse LLM response for parameter validation."""
     import json
-    import re
     
     # Try to extract JSON from response
     json_match = re.search(r'\{[\s\S]*\}', response)
@@ -636,7 +636,4 @@ def parse_summary_response(response: str) -> str:
     summary = re.sub(r'^Summary:\s*', '', summary, flags=re.IGNORECASE)
     
     return summary.strip()
-
-
-import re
 

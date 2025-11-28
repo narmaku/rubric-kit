@@ -19,6 +19,7 @@ from rubric_kit.schema import (
     JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig,
     Rubric, Dimension, Criterion, ToolSpec, ArenaSpec, ArenaContestant
 )
+from rubric_kit import converters
 
 
 # ============================================================================
@@ -82,83 +83,20 @@ def create_generator(args) -> RubricGenerator:
     )
 
 
+# Re-export converters for backward compatibility with tests
 def convert_tool_spec_to_dict(tool_spec: ToolSpec) -> Dict[str, Any]:
     """Convert a ToolSpec to dictionary format."""
-    tool_dict: Dict[str, Any] = {}
-    if tool_spec.min_calls is not None:
-        tool_dict["min_calls"] = tool_spec.min_calls
-    if tool_spec.max_calls is not None:
-        tool_dict["max_calls"] = tool_spec.max_calls
-    # Preserve params distinction: None (not declared) vs {} (empty dict)
-    if tool_spec.params is not None:
-        tool_dict["params"] = tool_spec.params
-    return tool_dict if tool_dict else None
+    return converters.tool_spec_to_dict(tool_spec)
 
 
 def convert_criterion_to_dict(criterion: Criterion) -> Dict[str, Any]:
     """Convert a Criterion to dictionary format."""
-    crit_dict: Dict[str, Any] = {
-        "category": criterion.category,
-        "weight": criterion.weight,
-        "dimension": criterion.dimension,
-        "criterion": criterion.criterion
-    }
-    
-    if not criterion.tool_calls:
-        return crit_dict
-    
-    required_list = [
-        {tc.name: convert_tool_spec_to_dict(tc)}
-        for tc in criterion.tool_calls.required
-    ]
-    
-    optional_list = [
-        {tc.name: convert_tool_spec_to_dict(tc)}
-        for tc in criterion.tool_calls.optional
-    ]
-    
-    prohibited_list = [
-        {tc.name: None}
-        for tc in criterion.tool_calls.prohibited
-    ]
-    
-    crit_dict["tool_calls"] = {
-        "respect_order": criterion.tool_calls.respect_order,
-        "required": required_list,
-        "optional": optional_list if optional_list else [],
-        "prohibited": prohibited_list if prohibited_list else []
-    }
-    # Only include params_strict_mode if it's True (default is False)
-    if criterion.tool_calls.params_strict_mode:
-        crit_dict["tool_calls"]["params_strict_mode"] = True
-    
-    return crit_dict
+    return converters.criterion_to_dict(criterion)
 
 
 def convert_rubric_to_yaml_dict(rubric: Rubric) -> Dict[str, Any]:
     """Convert a Rubric object to YAML dictionary format."""
-    rubric_dict: Dict[str, Any] = {}
-    
-    # Include variables section first if present (sorted alphabetically for consistency)
-    if rubric.variables:
-        rubric_dict["variables"] = dict(sorted(rubric.variables.items()))
-    
-    rubric_dict["dimensions"] = []
-    for dim in rubric.dimensions:
-        dim_dict: Dict[str, Any] = {
-            dim.name: dim.description,
-            "grading_type": dim.grading_type
-        }
-        if dim.scores:
-            dim_dict["scores"] = dim.scores
-        rubric_dict["dimensions"].append(dim_dict)
-    
-    rubric_dict["criteria"] = {
-        criterion.name: convert_criterion_to_dict(criterion)
-        for criterion in rubric.criteria
-    }
-    
-    return rubric_dict
+    return converters.rubric_to_dict(rubric)
 
 
 def write_rubric_to_file(rubric: Rubric, output_path: str) -> None:

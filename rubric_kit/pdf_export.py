@@ -17,6 +17,23 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 
 
+# =============================================================================
+# COMMON COLORS
+# =============================================================================
+
+COLORS = {
+    "primary": colors.HexColor('#2c3e50'),
+    "secondary": colors.HexColor('#666666'),
+    "title": colors.HexColor('#1a1a1a'),
+    "success": colors.HexColor('#27ae60'),
+    "danger": colors.HexColor('#c0392b'),
+    "warning": colors.HexColor('#f39c12'),
+    "info": colors.HexColor('#3498db'),
+    "header_bg": colors.HexColor('#34495e'),
+    "row_alt": colors.HexColor('#f5f5f5'),
+}
+
+
 def _load_evaluation_data(input_file: str) -> Dict[str, Any]:
     """
     Load evaluation data from YAML or JSON file.
