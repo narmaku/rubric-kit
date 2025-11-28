@@ -572,3 +572,331 @@ def test_judge_panel_config_auto_sets_unanimous_threshold():
     
     assert panel.consensus.threshold == 3  # All judges
 
+
+# ============================================================================
+# Arena Schema Tests
+# ============================================================================
+
+def test_arena_contestant_basic():
+    """Test basic ArenaContestant creation."""
+    from rubric_kit.schema import ArenaContestant
+    
+    contestant = ArenaContestant(
+        id="gpt-4o",
+        name="GPT-4o",
+        input_file="sessions/session_gpt4o.txt"
+    )
+    
+    assert contestant.id == "gpt-4o"
+    assert contestant.name == "GPT-4o"
+    assert contestant.input_type == "chat_session"  # Default
+    assert contestant.input_file == "sessions/session_gpt4o.txt"
+    assert contestant.variables is None
+    assert contestant.variables_file is None
+    assert contestant.metadata is None
+    assert contestant.description is None
+
+
+def test_arena_contestant_with_qna_input():
+    """Test ArenaContestant with Q&A input type."""
+    from rubric_kit.schema import ArenaContestant
+    
+    contestant = ArenaContestant(
+        id="gemini-flash",
+        name="Gemini 2.5 Flash",
+        input_type="qna",
+        input_file="qna/qna_gemini.yaml"
+    )
+    
+    assert contestant.input_type == "qna"
+
+
+def test_arena_contestant_with_variables():
+    """Test ArenaContestant with inline variables."""
+    from rubric_kit.schema import ArenaContestant
+    
+    contestant = ArenaContestant(
+        id="gpt-4o",
+        name="GPT-4o",
+        input_file="sessions/session_gpt4o.txt",
+        variables={
+            "os_distro": "Fedora Linux 42",
+            "cpu_count": "8"
+        }
+    )
+    
+    assert contestant.variables == {"os_distro": "Fedora Linux 42", "cpu_count": "8"}
+
+
+def test_arena_contestant_with_variables_file():
+    """Test ArenaContestant with external variables file."""
+    from rubric_kit.schema import ArenaContestant
+    
+    contestant = ArenaContestant(
+        id="granite4",
+        name="Granite 4",
+        input_file="sessions/session_granite4.txt",
+        variables_file="variables/vars_granite4.yaml"
+    )
+    
+    assert contestant.variables_file == "variables/vars_granite4.yaml"
+
+
+def test_arena_contestant_with_metadata():
+    """Test ArenaContestant with custom metadata."""
+    from rubric_kit.schema import ArenaContestant
+    
+    contestant = ArenaContestant(
+        id="gpt-4o",
+        name="GPT-4o",
+        input_file="sessions/session_gpt4o.txt",
+        metadata={"version": "2024-08-06", "temperature": 0.7},
+        description="OpenAI GPT-4o model evaluation"
+    )
+    
+    assert contestant.metadata == {"version": "2024-08-06", "temperature": 0.7}
+    assert contestant.description == "OpenAI GPT-4o model evaluation"
+
+
+def test_arena_contestant_invalid_input_type():
+    """Test that invalid input_type raises error."""
+    from rubric_kit.schema import ArenaContestant
+    
+    with pytest.raises(ValidationError):
+        ArenaContestant(
+            id="test",
+            name="Test",
+            input_type="invalid",
+            input_file="test.txt"
+        )
+
+
+def test_arena_contestant_requires_id_name_input():
+    """Test that ArenaContestant requires id, name, and input_file."""
+    from rubric_kit.schema import ArenaContestant
+    
+    with pytest.raises(ValidationError):
+        ArenaContestant(id="test", name="Test")  # Missing input_file
+    
+    with pytest.raises(ValidationError):
+        ArenaContestant(id="test", input_file="test.txt")  # Missing name
+    
+    with pytest.raises(ValidationError):
+        ArenaContestant(name="Test", input_file="test.txt")  # Missing id
+
+
+def test_arena_spec_basic():
+    """Test basic ArenaSpec creation."""
+    from rubric_kit.schema import ArenaSpec, ArenaContestant
+    
+    spec = ArenaSpec(
+        rubric_file="rubric.yaml",
+        judges_panel_file="judges.yaml",
+        contestants=[
+            ArenaContestant(
+                id="gpt-4o",
+                name="GPT-4o",
+                input_file="session_gpt4o.txt"
+            )
+        ]
+    )
+    
+    assert spec.rubric_file == "rubric.yaml"
+    assert spec.judges_panel_file == "judges.yaml"
+    assert len(spec.contestants) == 1
+    assert spec.name is None
+    assert spec.description is None
+
+
+def test_arena_spec_with_name_and_description():
+    """Test ArenaSpec with optional name and description."""
+    from rubric_kit.schema import ArenaSpec, ArenaContestant
+    
+    spec = ArenaSpec(
+        name="Q4 2025 Model Comparison",
+        description="Comparing assistant models on system summary task",
+        rubric_file="rubric.yaml",
+        judges_panel_file="judges.yaml",
+        contestants=[
+            ArenaContestant(id="gpt-4o", name="GPT-4o", input_file="session.txt")
+        ]
+    )
+    
+    assert spec.name == "Q4 2025 Model Comparison"
+    assert spec.description == "Comparing assistant models on system summary task"
+
+
+def test_arena_spec_multiple_contestants():
+    """Test ArenaSpec with multiple contestants."""
+    from rubric_kit.schema import ArenaSpec, ArenaContestant
+    
+    spec = ArenaSpec(
+        rubric_file="rubric.yaml",
+        judges_panel_file="judges.yaml",
+        contestants=[
+            ArenaContestant(id="gpt-4o", name="GPT-4o", input_file="session1.txt"),
+            ArenaContestant(id="granite4", name="Granite 4", input_file="session2.txt"),
+            ArenaContestant(id="gemini", name="Gemini 2.5", input_type="qna", input_file="qna.yaml")
+        ]
+    )
+    
+    assert len(spec.contestants) == 3
+    assert spec.contestants[0].id == "gpt-4o"
+    assert spec.contestants[1].id == "granite4"
+    assert spec.contestants[2].id == "gemini"
+    assert spec.contestants[2].input_type == "qna"
+
+
+def test_arena_spec_requires_at_least_one_contestant():
+    """Test that ArenaSpec requires at least one contestant."""
+    from rubric_kit.schema import ArenaSpec
+    
+    with pytest.raises(ValidationError):
+        ArenaSpec(
+            rubric_file="rubric.yaml",
+            judges_panel_file="judges.yaml",
+            contestants=[]  # Empty contestants
+        )
+
+
+def test_arena_spec_requires_rubric_and_judges():
+    """Test that ArenaSpec requires rubric_file and judges_panel_file."""
+    from rubric_kit.schema import ArenaSpec, ArenaContestant
+    
+    contestants = [ArenaContestant(id="test", name="Test", input_file="test.txt")]
+    
+    with pytest.raises(ValidationError):
+        ArenaSpec(
+            judges_panel_file="judges.yaml",
+            contestants=contestants
+        )  # Missing rubric_file
+    
+    with pytest.raises(ValidationError):
+        ArenaSpec(
+            rubric_file="rubric.yaml",
+            contestants=contestants
+        )  # Missing judges_panel_file
+
+
+def test_arena_spec_validates_unique_contestant_ids():
+    """Test that ArenaSpec validates contestant IDs are unique."""
+    from rubric_kit.schema import ArenaSpec, ArenaContestant
+    
+    with pytest.raises(ValidationError, match="Duplicate contestant id"):
+        ArenaSpec(
+            rubric_file="rubric.yaml",
+            judges_panel_file="judges.yaml",
+            contestants=[
+                ArenaContestant(id="gpt-4o", name="GPT-4o v1", input_file="session1.txt"),
+                ArenaContestant(id="gpt-4o", name="GPT-4o v2", input_file="session2.txt")  # Duplicate ID
+            ]
+        )
+
+
+# ============================================================================
+# Rubric Variables Coercion Tests
+# ============================================================================
+
+def test_rubric_variables_coerces_integers_to_strings():
+    """Test that integer values in variables are coerced to strings."""
+    from rubric_kit.schema import Rubric, Dimension, Criterion
+    
+    rubric = Rubric(
+        dimensions=[
+            Dimension(name="test_dim", description="Test", grading_type="binary")
+        ],
+        criteria=[
+            Criterion(
+                name="test_criterion",
+                weight=1,
+                dimension="test_dim",
+                criterion="There are {{port_count}} ports."
+            )
+        ],
+        variables={
+            "port_count": 10,  # Integer should be coerced to "10"
+            "connection_count": 15  # Integer should be coerced to "15"
+        }
+    )
+    
+    assert rubric.variables["port_count"] == "10"
+    assert rubric.variables["connection_count"] == "15"
+
+
+def test_rubric_variables_coerces_floats_to_strings():
+    """Test that float values in variables are coerced to strings."""
+    from rubric_kit.schema import Rubric, Dimension, Criterion
+    
+    rubric = Rubric(
+        dimensions=[
+            Dimension(name="test_dim", description="Test", grading_type="binary")
+        ],
+        criteria=[
+            Criterion(
+                name="test_criterion",
+                weight=1,
+                dimension="test_dim",
+                criterion="Temperature is {{temp}}."
+            )
+        ],
+        variables={
+            "temp": 0.7,
+            "ratio": 3.14
+        }
+    )
+    
+    assert rubric.variables["temp"] == "0.7"
+    assert rubric.variables["ratio"] == "3.14"
+
+
+def test_rubric_variables_coerces_booleans_to_strings():
+    """Test that boolean values in variables are coerced to strings."""
+    from rubric_kit.schema import Rubric, Dimension, Criterion
+    
+    rubric = Rubric(
+        dimensions=[
+            Dimension(name="test_dim", description="Test", grading_type="binary")
+        ],
+        criteria=[
+            Criterion(
+                name="test_criterion",
+                weight=1,
+                dimension="test_dim",
+                criterion="Feature enabled: {{enabled}}."
+            )
+        ],
+        variables={
+            "enabled": True,
+            "disabled": False
+        }
+    )
+    
+    assert rubric.variables["enabled"] == "True"
+    assert rubric.variables["disabled"] == "False"
+
+
+def test_rubric_variables_keeps_strings_unchanged():
+    """Test that string values in variables remain unchanged."""
+    from rubric_kit.schema import Rubric, Dimension, Criterion
+    
+    rubric = Rubric(
+        dimensions=[
+            Dimension(name="test_dim", description="Test", grading_type="binary")
+        ],
+        criteria=[
+            Criterion(
+                name="test_criterion",
+                weight=1,
+                dimension="test_dim",
+                criterion="OS is {{os_name}}."
+            )
+        ],
+        variables={
+            "os_name": "Fedora Linux 42",
+            "version": "1.0.0"
+        }
+    )
+    
+    assert rubric.variables["os_name"] == "Fedora Linux 42"
+    assert rubric.variables["version"] == "1.0.0"
+

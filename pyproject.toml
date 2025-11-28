@@ -7,7 +7,41 @@ name = "rubric-kit"
 version = "0.1.0"
 description = "Generate high-quality Rubrics based on custom dimensions, descriptors, criteria and scoring system."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.8"
+authors = [
+    { name = "Nicolas Munoz", email = "narmaku@protonmail.com" }
+]
+maintainers = [
+    { name = "Nicolas Munoz", email = "narmaku@protonmail.com" }
+]
+keywords = [
+    "rubric",
+    "evaluation",
+    "llm",
+    "ai",
+    "judge",
+    "grading",
+    "assessment",
+    "openai",
+    "pydantic",
+    "yaml",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.5.0",
     "PyYAML>=6.0.1",
@@ -23,8 +57,17 @@ dev = [
     "pytest-cov>=4.1.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/narmaku/rubric-kit"
+Repository = "https://github.com/narmaku/rubric-kit"
+Issues = "https://github.com/narmaku/rubric-kit/issues"
+Documentation = "https://github.com/narmaku/rubric-kit#readme"
+
 [project.scripts]
 rubric-kit = "rubric_kit.main:main"
+
+[tool.setuptools.packages.find]
+include = ["rubric_kit*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

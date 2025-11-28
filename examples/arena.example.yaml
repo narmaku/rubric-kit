@@ -1,0 +1,110 @@
+# Example Arena Specification for Comparative Model Evaluation
+# =============================================================
+#
+# An Arena allows you to evaluate multiple models/sessions against
+# a single shared rubric using a consistent judge panel. The results
+# are aggregated and ranked for easy comparison.
+#
+# TWO MODES OF OPERATION:
+#
+# Mode 1: Run fresh evaluations from this arena spec
+#   rubric-kit arena --arena-spec arena.yaml --output-file arena_results.yaml
+#   rubric-kit arena --arena-spec arena.yaml --output-file arena_results.yaml --report arena_report.pdf
+#
+# Mode 2: Combine existing output.yaml files into arena comparison
+#   rubric-kit arena --from-outputs output1.yaml output2.yaml output3.yaml --output-file arena_results.yaml
+#   rubric-kit arena --from-outputs output_*.yaml --output-file arena_results.yaml --report arena_report.pdf
+
+arena:
+  # Optional name and description for this arena
+  name: "Q4 2025 Model Comparison"
+  description: "Comparing assistant models on system summary task"
+  
+  # Reference to the shared rubric file (used for ALL contestants)
+  # Path is relative to this arena spec file
+  rubric_file: "rubric.example.yaml"
+  
+  # Reference to the shared judge panel configuration
+  # Path is relative to this arena spec file
+  judges_panel_file: "judge_panel.example.yaml"
+  
+  # List of contestants to evaluate
+  contestants:
+    # Contestant 1: GPT-4o
+    - id: gpt-4o
+      name: "GPT-4o"
+      input_type: chat_session  # or "qna"
+      input_file: "sessions/session_gpt4o.txt"
+      
+      # Optional: Variables to substitute in rubric placeholders
+      # Each contestant can have their own variable values
+      variables:
+        os_distro: "Fedora Linux 42"
+        cpu_count: "8"
+        ram_total: "64 GB"
+        hostname: "gpt4o-test-host"
+        username: "testuser"
+      
+      # Optional: Custom metadata for this contestant
+      metadata:
+        version: "2024-08-06"
+        temperature: 0.7
+        provider: "OpenAI"
+      
+      # Optional: Human-readable description
+      description: "OpenAI GPT-4o model evaluation"
+    
+    # Contestant 2: Granite 4
+    - id: granite4
+      name: "Granite 4"
+      input_type: chat_session
+      input_file: "sessions/session_granite4.txt"
+      
+      # Alternative: Use external variables file instead of inline
+      variables_file: "variables/vars_granite4.yaml"
+      
+      metadata:
+        version: "4.0"
+        temperature: 0.3
+        provider: "IBM"
+      description: "IBM Granite 4 model evaluation"
+    
+    # Contestant 3: Gemini (using Q&A input)
+    - id: gemini-2.5-flash
+      name: "Gemini 2.5 Flash"
+      input_type: qna  # Different input type
+      input_file: "qna/qna_gemini_flash.yaml"
+      
+      variables:
+        os_distro: "Red Hat Enterprise Linux 9"
+        cpu_count: "4"
+        ram_total: "16 GB"
+        hostname: "gemini-test-host"
+        username: "admin"
+      
+      metadata:
+        version: "2.5-flash"
+        provider: "Google"
+      description: "Google Gemini 2.5 Flash evaluation"
+
+# Output Structure:
+# =================
+# The arena command generates a YAML file with:
+#   - mode: "arena"
+#   - arena_name: from this spec
+#   - contestants: results for each contestant keyed by id
+#   - rankings: sorted list of contestants by score percentage
+#   - rubric: full rubric data (shared)
+#   - judge_panel: full panel config (shared)
+#   - metadata: timestamp, source files, etc.
+#
+# PDF Export:
+# ===========
+# When exporting with --report, generates an "Arena Comparative Evaluation Report"
+# with:
+#   - Rankings summary table
+#   - Comparative bar charts (scores by dimension)
+#   - Radar/spider charts (performance profiles)
+#   - Detailed results per contestant
+#   - Shared rubric and judges panel appendix
+

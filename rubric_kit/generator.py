@@ -189,6 +189,47 @@ def parse_chat_session(file_path: str) -> ChatSessionInput:
     return ChatSessionInput(content=content, context=None)
 
 
+def parse_dimensions_file(file_path: str) -> List[Dimension]:
+    """
+    Parse dimensions from a YAML file.
+    
+    Args:
+        file_path: Path to dimensions YAML file
+        
+    Returns:
+        List of Dimension objects
+        
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If file format is invalid
+    """
+    path = Path(file_path)
+    
+    if not path.exists():
+        raise FileNotFoundError(f"Dimensions file not found: {file_path}")
+    
+    content = path.read_text()
+    
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError as e:
+        raise ValueError(f"Invalid YAML format: {e}")
+    
+    if not isinstance(data, dict) or "dimensions" not in data:
+        raise ValueError("Dimensions file must contain a 'dimensions' key")
+    
+    dims_data = data["dimensions"]
+    
+    if not dims_data or not isinstance(dims_data, list):
+        raise ValueError("Dimensions file must contain at least one dimension")
+    
+    dimensions = []
+    for dim_data in dims_data:
+        dimensions.append(Dimension(**dim_data))
+    
+    return dimensions
+
+
 def repair_json(text: str) -> str:
     """
     Attempt to repair common JSON issues in LLM output.
@@ -260,19 +301,152 @@ def _parse_json_response(content: str) -> Any:
         )
 
 
+def _safe_int(value: Any) -> Optional[int]:
+    """Safely convert a value to int, returning None if not possible."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_scores(scores: Any) -> Optional[Dict[int, str]]:
+    """Normalize scores from various LLM response formats to Dict[int, str].
+    
+    Handles:
+    - Dict[str|int, str]: Standard format, just convert keys to int
+    - List[Dict]: List of single-key dicts like [{1: "Bad"}, {2: "Good"}]
+    - List[List]: List of pairs like [[1, "Bad"], [2, "Good"]]
+    
+    Skips entries with non-integer keys (e.g., "score", "description").
+    """
+    if scores is None:
+        return None
+    
+    # Already a dict - convert keys to ints, skipping invalid keys
+    if isinstance(scores, dict):
+        result = {}
+        for k, v in scores.items():
+            int_key = _safe_int(k)
+            if int_key is not None and isinstance(v, str):
+                result[int_key] = v
+        return result if result else None
+    
+    # List format - convert to dict
+    if isinstance(scores, list):
+        result = {}
+        for item in scores:
+            if isinstance(item, dict):
+                # Single-key dict like {1: "Bad"} or {2: "Good"}
+                for k, v in item.items():
+                    int_key = _safe_int(k)
+                    if int_key is not None and isinstance(v, str):
+                        result[int_key] = v
+            elif isinstance(item, (list, tuple)) and len(item) == 2:
+                # Pair like [1, "Bad"]
+                int_key = _safe_int(item[0])
+                if int_key is not None:
+                    result[int_key] = str(item[1])
+        return result if result else None
+    
+    return None
+
+
 def _convert_to_dimensions(response: List[Dict[str, Any]]) -> List[Dimension]:
     """Convert LLM response to list of Dimension objects."""
     dimensions = []
     for item in response:
         if "scores" in item and item["scores"]:
-            item["scores"] = {int(k): v for k, v in item["scores"].items()}
+            item["scores"] = _normalize_scores(item["scores"])
         dimensions.append(Dimension(**item))
     return dimensions
 
 
+def _normalize_tool_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize a tool spec, handling common LLM variations.
+    
+    Handles these formats:
+    1. {"name": "tool_name", "params": {...}} - standard format, pass through
+    2. {"tool_name": "some_tool", "params": {...}} - 'tool_name' as alias for 'name'
+    3. {"some_tool": {"params": {...}}} - tool name as key, inner dict has params
+    4. {"some_tool": {"min_calls": 1, ...}} - tool name as key with other fields
+    """
+    # If 'name' already exists, just return a copy
+    if "name" in spec:
+        return spec.copy()
+    
+    normalized = spec.copy()
+    
+    # Handle 'tool_name' as an alias for 'name'
+    if "tool_name" in normalized:
+        normalized["name"] = normalized.pop("tool_name")
+        return normalized
+    
+    # Handle format where tool name is the key: {"tool_name": {"params": {...}}}
+    # This is common when LLM uses tool name as a dict key
+    known_fields = {"name", "tool_name", "min_calls", "max_calls", "params"}
+    unknown_keys = [k for k in spec.keys() if k not in known_fields]
+    
+    # If there's exactly one unknown key and it looks like a tool name (not a known field),
+    # treat it as the tool name with the value being additional properties
+    if len(unknown_keys) == 1:
+        tool_name_key = unknown_keys[0]
+        inner_value = spec[tool_name_key]
+        
+        # Build the normalized spec
+        normalized = {"name": tool_name_key}
+        
+        # If the inner value is a dict, merge its properties
+        if isinstance(inner_value, dict):
+            for k, v in inner_value.items():
+                if k in ("min_calls", "max_calls", "params"):
+                    normalized[k] = v
+        
+        # Also include any known fields from the outer dict
+        for field in ("min_calls", "max_calls", "params"):
+            if field in spec and field not in normalized:
+                normalized[field] = spec[field]
+        
+        return normalized
+    
+    return normalized
+
+
+def _normalize_tool_calls(tool_calls: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize tool_calls structure from LLM response."""
+    if not tool_calls:
+        return tool_calls
+    
+    normalized = tool_calls.copy()
+    
+    # Normalize required tools
+    if "required" in normalized and isinstance(normalized["required"], list):
+        normalized["required"] = [_normalize_tool_spec(spec) for spec in normalized["required"]]
+    
+    # Normalize optional tools
+    if "optional" in normalized and isinstance(normalized["optional"], list):
+        normalized["optional"] = [_normalize_tool_spec(spec) for spec in normalized["optional"]]
+    
+    # Normalize prohibited tools
+    if "prohibited" in normalized and isinstance(normalized["prohibited"], list):
+        normalized["prohibited"] = [_normalize_tool_spec(spec) for spec in normalized["prohibited"]]
+    
+    return normalized
+
+
 def _convert_to_criteria(response: List[Dict[str, Any]]) -> List[Criterion]:
     """Convert LLM response to list of Criterion objects."""
-    return [Criterion(**item) for item in response]
+    criteria = []
+    for item in response:
+        # Normalize tool_calls if present
+        if "tool_calls" in item and item["tool_calls"]:
+            item = item.copy()
+            item["tool_calls"] = _normalize_tool_calls(item["tool_calls"])
+        criteria.append(Criterion(**item))
+    return criteria
 
 
 def _validate_dimension_criteria_params(
@@ -284,6 +458,37 @@ def _validate_dimension_criteria_params(
         raise ValueError("num_dimensions must be between 1 and 10")
     if num_criteria is not None and not 1 <= num_criteria <= 10:
         raise ValueError("num_criteria must be between 1 and 10")
+
+
+def _merge_dimensions(
+    existing: List[Dimension],
+    to_merge: Optional[List[Dimension]]
+) -> List[Dimension]:
+    """
+    Merge dimensions, with to_merge dimensions taking priority.
+    
+    Args:
+        existing: Existing dimensions from rubric
+        to_merge: Optional dimensions to merge in
+        
+    Returns:
+        Merged list of dimensions (to_merge + any unique from existing)
+    """
+    if to_merge is None:
+        return existing
+    
+    # Build set of names from dimensions to merge
+    merged_names = {d.name for d in to_merge}
+    
+    # Start with all dimensions to merge
+    result = list(to_merge)
+    
+    # Add any existing dimensions not in to_merge
+    for dim in existing:
+        if dim.name not in merged_names:
+            result.append(dim)
+    
+    return result
 
 
 class RubricGenerator:
@@ -333,7 +538,7 @@ class RubricGenerator:
         dimensions: List[Dimension],
         num_criteria: Optional[int] = None,
         category_hints: Optional[List[str]] = None
-    ) -> List[Criterion]:
+    ) -> tuple[List[Criterion], Optional[Dict[str, str]]]:
         """
         Generate evaluation criteria for dimensions.
         
@@ -344,7 +549,7 @@ class RubricGenerator:
             category_hints: Optional list of category names to guide generation
             
         Returns:
-            List of Criterion objects
+            Tuple of (List of Criterion objects, Optional variables dict)
         """
         prompt = build_criteria_generation_prompt(
             question=qa_input.question,
@@ -355,14 +560,23 @@ class RubricGenerator:
             context=qa_input.context
         )
         response = self._call_llm(prompt, categories=category_hints)
-        return _convert_to_criteria(response)
+        
+        # Handle new format with variables
+        if isinstance(response, dict) and "criteria" in response:
+            variables = response.get("variables")
+            criteria = _convert_to_criteria(response["criteria"])
+            return criteria, variables
+        
+        # Fallback for old format (just an array)
+        return _convert_to_criteria(response), None
     
     def generate_rubric(
         self,
         qa_input: QAInput,
         num_dimensions: Optional[int] = None,
         num_criteria: Optional[int] = None,
-        category_hints: Optional[List[str]] = None
+        category_hints: Optional[List[str]] = None,
+        dimensions: Optional[List[Dimension]] = None
     ) -> Rubric:
         """
         Generate a complete rubric from Q&A pair.
@@ -372,29 +586,36 @@ class RubricGenerator:
             num_dimensions: Number of dimensions to generate (1-10), or None for auto
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
+            dimensions: Optional pre-defined dimensions (skips dimension generation)
             
         Returns:
-            Validated Rubric object
+            Validated Rubric object with variables extracted from the content
             
         Raises:
             ValueError: If parameters are out of range or generated rubric is invalid
         """
         _validate_dimension_criteria_params(num_dimensions, num_criteria)
         
-        dimensions = self.generate_dimensions(qa_input, num_dimensions)
-        criteria = self.generate_criteria(
+        # Use provided dimensions or generate new ones
+        if dimensions is not None:
+            dims = dimensions
+        else:
+            dims = self.generate_dimensions(qa_input, num_dimensions)
+        
+        criteria, variables = self.generate_criteria(
             qa_input,
-            dimensions,
+            dims,
             num_criteria,
             category_hints
         )
         
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dims, criteria=criteria, variables=variables)
     
     def refine_rubric(
         self,
         rubric: Rubric,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        dimensions_to_merge: Optional[List[Dimension]] = None
     ) -> Rubric:
         """
         Refine an existing rubric with optional feedback.
@@ -402,27 +623,34 @@ class RubricGenerator:
         Args:
             rubric: Existing rubric to refine
             feedback: Optional specific feedback for refinement
+            dimensions_to_merge: Optional dimensions to merge with existing
             
         Returns:
-            Refined Rubric object
+            Refined Rubric object with variables
         """
+        # Merge dimensions if provided
+        merged_dims = _merge_dimensions(rubric.dimensions, dimensions_to_merge)
+        
         prompt = build_refine_rubric_prompt(
-            dimensions=rubric.dimensions,
+            dimensions=merged_dims,
             criteria=rubric.criteria,
-            feedback=feedback
+            feedback=feedback,
+            variables=rubric.variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
+        variables = response.get("variables")
         
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
     def refine_rubric_with_qa(
         self,
         rubric: Rubric,
         qa_input: QAInput,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        dimensions_to_merge: Optional[List[Dimension]] = None
     ) -> Rubric:
         """
         Refine an existing rubric using Q&A context.
@@ -431,30 +659,37 @@ class RubricGenerator:
             rubric: Existing rubric to refine
             qa_input: Q&A input to use as context for refinement
             feedback: Optional specific feedback for refinement
+            dimensions_to_merge: Optional dimensions to merge with existing
             
         Returns:
-            Refined Rubric object
+            Refined Rubric object with variables
         """
+        # Merge dimensions if provided
+        merged_dims = _merge_dimensions(rubric.dimensions, dimensions_to_merge)
+        
         prompt = build_refine_rubric_with_qa_prompt(
-            dimensions=rubric.dimensions,
+            dimensions=merged_dims,
             criteria=rubric.criteria,
             question=qa_input.question,
             answer=qa_input.answer,
             feedback=feedback,
-            context=qa_input.context
+            context=qa_input.context,
+            variables=rubric.variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
+        variables = response.get("variables")
         
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
     def refine_rubric_with_chat(
         self,
         rubric: Rubric,
         chat_input: ChatSessionInput,
-        feedback: Optional[str] = None
+        feedback: Optional[str] = None,
+        dimensions_to_merge: Optional[List[Dimension]] = None
     ) -> Rubric:
         """
         Refine an existing rubric using chat session context.
@@ -463,23 +698,29 @@ class RubricGenerator:
             rubric: Existing rubric to refine
             chat_input: Chat session input to use as context for refinement
             feedback: Optional specific feedback for refinement
+            dimensions_to_merge: Optional dimensions to merge with existing
             
         Returns:
-            Refined Rubric object
+            Refined Rubric object with variables
         """
+        # Merge dimensions if provided
+        merged_dims = _merge_dimensions(rubric.dimensions, dimensions_to_merge)
+        
         prompt = build_refine_rubric_with_chat_prompt(
-            dimensions=rubric.dimensions,
+            dimensions=merged_dims,
             criteria=rubric.criteria,
             chat_content=chat_input.content,
             feedback=feedback,
-            context=chat_input.context
+            context=chat_input.context,
+            variables=rubric.variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
+        variables = response.get("variables")
         
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
     def generate_dimensions_from_chat(
         self,
@@ -513,7 +754,7 @@ class RubricGenerator:
         dimensions: List[Dimension],
         num_criteria: Optional[int] = None,
         category_hints: Optional[List[str]] = None
-    ) -> List[Criterion]:
+    ) -> tuple[List[Criterion], Optional[Dict[str, str]]]:
         """
         Generate evaluation criteria for dimensions from chat session.
         
@@ -527,7 +768,7 @@ class RubricGenerator:
             category_hints: Optional list of category names to guide generation
             
         Returns:
-            List of Criterion objects
+            Tuple of (List of Criterion objects, Optional variables dict)
         """
         prompt = build_chat_criteria_generation_prompt(
             chat_content=chat_input.content,
@@ -537,14 +778,23 @@ class RubricGenerator:
             context=chat_input.context
         )
         response = self._call_llm(prompt, categories=category_hints)
-        return _convert_to_criteria(response)
+        
+        # Handle new format with variables
+        if isinstance(response, dict) and "criteria" in response:
+            variables = response.get("variables")
+            criteria = _convert_to_criteria(response["criteria"])
+            return criteria, variables
+        
+        # Fallback for old format (just an array)
+        return _convert_to_criteria(response), None
     
     def generate_rubric_from_chat(
         self,
         chat_input: ChatSessionInput,
         num_dimensions: Optional[int] = None,
         num_criteria: Optional[int] = None,
-        category_hints: Optional[List[str]] = None
+        category_hints: Optional[List[str]] = None,
+        dimensions: Optional[List[Dimension]] = None
     ) -> Rubric:
         """
         Generate a complete rubric from chat session.
@@ -557,24 +807,30 @@ class RubricGenerator:
             num_dimensions: Number of dimensions to generate (1-10), or None for auto
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
+            dimensions: Optional pre-defined dimensions (skips dimension generation)
             
         Returns:
-            Validated Rubric object
+            Validated Rubric object with variables extracted from the content
             
         Raises:
             ValueError: If parameters are out of range or generated rubric is invalid
         """
         _validate_dimension_criteria_params(num_dimensions, num_criteria)
         
-        dimensions = self.generate_dimensions_from_chat(chat_input, num_dimensions)
-        criteria = self.generate_criteria_from_chat(
+        # Use provided dimensions or generate new ones
+        if dimensions is not None:
+            dims = dimensions
+        else:
+            dims = self.generate_dimensions_from_chat(chat_input, num_dimensions)
+        
+        criteria, variables = self.generate_criteria_from_chat(
             chat_input,
-            dimensions,
+            dims,
             num_criteria,
             category_hints
         )
         
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dims, criteria=criteria, variables=variables)
     
     def _call_llm(self, prompt: str, **kwargs) -> Any:
         """

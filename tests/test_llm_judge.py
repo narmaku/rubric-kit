@@ -416,6 +416,148 @@ def test_build_consensus_reason_score_agreement():
 
 
 # ============================================================================
+# Tool Breakdown Extraction Tests
+# ============================================================================
+
+def test_extract_tool_breakdown_single_judge():
+    """Test that single judge's tool breakdown is returned."""
+    from rubric_kit.llm_judge import _extract_tool_breakdown
+    
+    judge_votes = [
+        {
+            "judge": "primary",
+            "passes": True,
+            "reason": "All tools called correctly",
+            "tool_breakdown": {"overall_pass": True, "overall_score": 3.0}
+        }
+    ]
+    
+    result = {"passes": True}
+    breakdown = _extract_tool_breakdown(judge_votes, result)
+    
+    assert breakdown is not None
+    assert breakdown["overall_pass"] is True
+    assert breakdown["overall_score"] == 3.0
+
+
+def test_extract_tool_breakdown_from_agreeing_judge():
+    """Test that tool breakdown is extracted from a judge that agrees with consensus."""
+    from rubric_kit.llm_judge import _extract_tool_breakdown
+    
+    # Scenario: First judge says PASS (wrong breakdown), second says FAIL (correct)
+    # Consensus is FAIL - we should get the breakdown from the FAIL judge
+    judge_votes = [
+        {
+            "judge": "gemini-flash",
+            "passes": True,  # Disagrees with final result
+            "reason": "All params look OK",
+            "tool_breakdown": {
+                "overall_pass": True,
+                "overall_score": 3.0,
+                "tool_results": [{"name": "tool1", "params_ok": True}]
+            }
+        },
+        {
+            "judge": "gemini-pro",
+            "passes": False,  # Agrees with final result
+            "reason": "Parameters have formatting issues",
+            "tool_breakdown": {
+                "overall_pass": False,
+                "overall_score": 1.0,
+                "tool_results": [{"name": "tool1", "params_ok": False}]
+            }
+        }
+    ]
+    
+    result = {"passes": False}  # Final consensus is FAIL
+    breakdown = _extract_tool_breakdown(judge_votes, result)
+    
+    # Should get the breakdown from the judge that agrees (gemini-pro, who said FAIL)
+    assert breakdown is not None
+    assert breakdown["overall_pass"] is False
+    assert breakdown["overall_score"] == 1.0
+    assert breakdown["tool_results"][0]["params_ok"] is False
+
+
+def test_extract_tool_breakdown_from_agreeing_judge_pass():
+    """Test that tool breakdown is extracted from agreeing judge when consensus is PASS."""
+    from rubric_kit.llm_judge import _extract_tool_breakdown
+    
+    # Scenario: First judge says FAIL (wrong), second says PASS (correct)
+    # Consensus is PASS - we should get the breakdown from the PASS judge
+    judge_votes = [
+        {
+            "judge": "strict-judge",
+            "passes": False,  # Disagrees with final result
+            "reason": "Found issues",
+            "tool_breakdown": {
+                "overall_pass": False,
+                "overall_score": 1.0
+            }
+        },
+        {
+            "judge": "lenient-judge",
+            "passes": True,  # Agrees with final result
+            "reason": "All good",
+            "tool_breakdown": {
+                "overall_pass": True,
+                "overall_score": 3.0
+            }
+        }
+    ]
+    
+    result = {"passes": True}  # Final consensus is PASS
+    breakdown = _extract_tool_breakdown(judge_votes, result)
+    
+    # Should get the breakdown from the judge that agrees (lenient-judge)
+    assert breakdown is not None
+    assert breakdown["overall_pass"] is True
+    assert breakdown["overall_score"] == 3.0
+
+
+def test_extract_tool_breakdown_no_breakdown_present():
+    """Test that None is returned when no tool breakdown is present."""
+    from rubric_kit.llm_judge import _extract_tool_breakdown
+    
+    judge_votes = [
+        {"judge": "primary", "passes": True, "reason": "OK"},
+        {"judge": "secondary", "passes": True, "reason": "OK"}
+    ]
+    
+    result = {"passes": True}
+    breakdown = _extract_tool_breakdown(judge_votes, result)
+    
+    assert breakdown is None
+
+
+def test_extract_tool_breakdown_fallback_when_no_agreeing_has_breakdown():
+    """Test fallback to first available breakdown when no agreeing judge has one."""
+    from rubric_kit.llm_judge import _extract_tool_breakdown
+    
+    # Only the disagreeing judge has a breakdown
+    judge_votes = [
+        {
+            "judge": "judge-with-breakdown",
+            "passes": True,  # Disagrees with final
+            "reason": "Pass",
+            "tool_breakdown": {"overall_pass": True, "overall_score": 3.0}
+        },
+        {
+            "judge": "judge-without-breakdown",
+            "passes": False,  # Agrees with final but no breakdown
+            "reason": "Fail"
+        }
+    ]
+    
+    result = {"passes": False}
+    breakdown = _extract_tool_breakdown(judge_votes, result)
+    
+    # Should fallback to the only available breakdown
+    assert breakdown is not None
+    assert breakdown["overall_pass"] is True
+
+
+# ============================================================================
 # LLM Parameter Tests
 # ============================================================================
 

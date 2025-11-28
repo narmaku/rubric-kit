@@ -1,7 +1,39 @@
 """Score processing logic for rubric evaluation."""
 
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional, Literal
 from rubric_kit.schema import Rubric, Criterion, Dimension
+
+
+def _calculate_tool_criterion_score(
+    weight: int,
+    passes: bool,
+    has_required: bool,
+    has_optional: bool,
+    has_prohibited: bool
+) -> tuple[int, int]:
+    """
+    Calculate score and max_score based on tool criterion content.
+    
+    Scoring is inferred from which tool lists are present:
+    - has_required: Standard scoring (Pass = weight, Fail = 0, max_score = weight)
+    - has_optional only: Bonus scoring (Pass = weight, Fail = 0, max_score = 0)
+    - has_prohibited only: Penalty scoring (Pass = 0, Fail = -weight, max_score = 0)
+    
+    Returns:
+        Tuple of (score, max_score)
+    """
+    # If has required tools, use standard scoring
+    if has_required:
+        return (weight if passes else 0, weight)
+    # If only optional tools, use bonus scoring
+    elif has_optional and not has_prohibited:
+        return (weight if passes else 0, 0)
+    # If only prohibited tools, use penalty scoring
+    elif has_prohibited and not has_optional:
+        return (0 if passes else -weight, 0)
+    else:
+        # Mixed optional + prohibited, or empty - use standard
+        return (weight if passes else 0, weight)
 
 
 def evaluate_binary_criterion(
@@ -10,7 +42,8 @@ def evaluate_binary_criterion(
     reason: str = "",
     consensus_reached: bool = True,
     consensus_count: int = 1,
-    judge_votes: List[Dict[str, Any]] = None
+    judge_votes: List[Dict[str, Any]] = None,
+    tool_breakdown: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a binary (pass/fail) criterion.
@@ -22,12 +55,24 @@ def evaluate_binary_criterion(
         consensus_reached: Whether consensus was reached
         consensus_count: Number of judges that agreed
         judge_votes: List of individual judge votes
+        tool_breakdown: Optional tool breakdown for tool call criteria
         
     Returns:
         Dictionary with evaluation results
     """
     weight = criterion.weight if isinstance(criterion.weight, int) else 0
-    score = weight if passes else 0
+    
+    # For tool criteria, infer scoring from tool lists
+    if criterion.tool_calls:
+        has_required = len(criterion.tool_calls.required) > 0
+        has_optional = len(criterion.tool_calls.optional) > 0
+        has_prohibited = len(criterion.tool_calls.prohibited) > 0
+        score, max_score = _calculate_tool_criterion_score(
+            weight, passes, has_required, has_optional, has_prohibited
+        )
+    else:
+        score = weight if passes else 0
+        max_score = weight
     
     result = {
         "criterion_name": criterion.name,
@@ -36,7 +81,7 @@ def evaluate_binary_criterion(
         "dimension": criterion.dimension,
         "result": "pass" if passes else "fail",
         "score": score,
-        "max_score": weight,
+        "max_score": max_score,
         "reason": reason,
         "consensus_reached": consensus_reached,
         "consensus_count": consensus_count
@@ -44,6 +89,9 @@ def evaluate_binary_criterion(
     
     if judge_votes:
         result["judge_votes"] = judge_votes
+    
+    if tool_breakdown:
+        result["tool_breakdown"] = tool_breakdown
     
     return result
 
@@ -147,6 +195,7 @@ def evaluate_rubric(rubric: Rubric, evaluations: Dict[str, Dict[str, Any]]) -> L
             consensus_reached = eval_data.get("consensus_reached", True)
             consensus_count = eval_data.get("consensus_count", 1)
             judge_votes = eval_data.get("judge_votes")
+            tool_breakdown = eval_data.get("tool_breakdown")
             
             result = evaluate_binary_criterion(
                 criterion, 
@@ -154,7 +203,8 @@ def evaluate_rubric(rubric: Rubric, evaluations: Dict[str, Dict[str, Any]]) -> L
                 reason,
                 consensus_reached=consensus_reached,
                 consensus_count=consensus_count,
-                judge_votes=judge_votes
+                judge_votes=judge_votes,
+                tool_breakdown=tool_breakdown
             )
             results.append(result)
             

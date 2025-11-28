@@ -7,17 +7,17 @@ import yaml
 import traceback
 from datetime import datetime
 from functools import wraps
-from typing import Callable, Dict, Any, Optional, Tuple
+from typing import Callable, Dict, Any, List, Optional, Tuple
 
-from rubric_kit.validator import load_rubric, load_judge_panel_config, RubricValidationError
+from rubric_kit.validator import load_rubric, load_judge_panel_config, RubricValidationError, substitute_variables
 from rubric_kit.processor import evaluate_rubric, calculate_total_score, calculate_percentage_score
-from rubric_kit.output import write_yaml, print_table, convert_yaml_to_csv, convert_yaml_to_json
+from rubric_kit.output import write_yaml, print_table, print_tool_breakdowns, convert_yaml_to_csv, convert_yaml_to_json
 from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
-from rubric_kit.generator import RubricGenerator, parse_qa_input, parse_chat_session
-from rubric_kit.pdf_export import export_evaluation_pdf
+from rubric_kit.generator import RubricGenerator, parse_qa_input, parse_chat_session, parse_dimensions_file
+from rubric_kit.pdf_export import export_evaluation_pdf, export_arena_pdf
 from rubric_kit.schema import (
     JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig,
-    Rubric, Dimension, Criterion, ToolSpec
+    Rubric, Dimension, Criterion, ToolSpec, ArenaSpec, ArenaContestant
 )
 
 
@@ -137,8 +137,13 @@ def convert_criterion_to_dict(criterion: Criterion) -> Dict[str, Any]:
 
 def convert_rubric_to_yaml_dict(rubric: Rubric) -> Dict[str, Any]:
     """Convert a Rubric object to YAML dictionary format."""
-    rubric_dict: Dict[str, Any] = {"dimensions": []}
+    rubric_dict: Dict[str, Any] = {}
     
+    # Include variables section first if present (sorted alphabetically for consistency)
+    if rubric.variables:
+        rubric_dict["variables"] = dict(sorted(rubric.variables.items()))
+    
+    rubric_dict["dimensions"] = []
     for dim in rubric.dimensions:
         dim_dict: Dict[str, Any] = {
             dim.name: dim.description,
@@ -157,7 +162,7 @@ def convert_rubric_to_yaml_dict(rubric: Rubric) -> Dict[str, Any]:
 
 
 def write_rubric_to_file(rubric: Rubric, output_path: str) -> None:
-    """Write a rubric to a YAML file."""
+    """Write a rubric to a YAML file (always self-contained with variables)."""
     rubric_dict = convert_rubric_to_yaml_dict(rubric)
     with open(output_path, 'w') as f:
         yaml.dump(
@@ -174,6 +179,14 @@ def print_rubric_summary(rubric: Rubric, title: str) -> None:
     print("\n" + "=" * 80)
     print(title)
     print("=" * 80)
+    
+    if rubric.variables:
+        print(f"\nVariables ({len(rubric.variables)}):")
+        for var_name, var_value in rubric.variables.items():
+            # Truncate long values
+            display_value = var_value if len(var_value) <= 40 else var_value[:37] + "..."
+            print(f"  • {var_name}: {display_value}")
+    
     print(f"\nDimensions ({len(rubric.dimensions)}):")
     for dim in rubric.dimensions:
         print(f"  • {dim.name} ({dim.grading_type})")
@@ -319,7 +332,10 @@ def cmd_evaluate(args) -> int:
     """
     # Load rubric
     print(f"Loading rubric from {args.rubric_file}...")
-    rubric = load_rubric(args.rubric_file)
+    variables_file = getattr(args, 'variables_file', None)
+    if variables_file:
+        print(f"   Using variables from: {variables_file}")
+    rubric = load_rubric(args.rubric_file, variables_file=variables_file)
     print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
     
     # Load or create judge panel configuration
@@ -430,6 +446,7 @@ def cmd_evaluate(args) -> int:
         print("RESULTS")
         print("=" * 80 + "\n")
         print_table(results, include_summary=True)
+        print_tool_breakdowns(results)
         print()
     
     return 0
@@ -475,6 +492,13 @@ def cmd_generate(args) -> int:
     # Parse dimension and criteria counts
     num_dimensions, num_criteria = parse_dimension_criteria_counts(args)
     
+    # Load dimensions file if provided
+    provided_dimensions = None
+    if args.dimensions_file:
+        print(f"\nLoading dimensions from {args.dimensions_file}...")
+        provided_dimensions = parse_dimensions_file(args.dimensions_file)
+        print(f"✓ Loaded {len(provided_dimensions)} dimensions (skipping dimension generation)")
+    
     # Generate rubric
     print_generation_progress(num_dimensions, num_criteria)
     
@@ -483,17 +507,21 @@ def cmd_generate(args) -> int:
             input_obj,
             num_dimensions=num_dimensions,
             num_criteria=num_criteria,
-            category_hints=category_hints
+            category_hints=category_hints,
+            dimensions=provided_dimensions
         )
     else:
         rubric = generator.generate_rubric(
             input_obj,
             num_dimensions=num_dimensions,
             num_criteria=num_criteria,
-            category_hints=category_hints
+            category_hints=category_hints,
+            dimensions=provided_dimensions
         )
     
     print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+    if rubric.variables:
+        print(f"   Variables extracted: {len(rubric.variables)}")
     
     # Write rubric to file
     print(f"\nWriting rubric to {args.output_file}...")
@@ -554,6 +582,34 @@ def load_self_contained_yaml(input_file: str) -> Dict[str, Any]:
         raise ValueError("Input file missing 'judge_panel' section - not a self-contained evaluation file")
     
     return data
+
+
+def load_arena_spec(arena_spec_file: str) -> ArenaSpec:
+    """Load and validate an arena specification file."""
+    if not os.path.exists(arena_spec_file):
+        raise FileNotFoundError(f"Arena spec file not found: {arena_spec_file}")
+    
+    with open(arena_spec_file, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
+    
+    # The arena spec should be under an 'arena' key
+    if "arena" not in data:
+        raise ValueError("Arena spec file must have an 'arena' key at the root")
+    
+    arena_data = data["arena"]
+    
+    # Parse contestants
+    contestants = []
+    for c in arena_data.get("contestants", []):
+        contestants.append(ArenaContestant(**c))
+    
+    return ArenaSpec(
+        name=arena_data.get("name"),
+        description=arena_data.get("description"),
+        rubric_file=arena_data["rubric_file"],
+        judges_panel_file=arena_data["judges_panel_file"],
+        contestants=contestants
+    )
 
 
 def rebuild_rubric_from_dict(rubric_data: Dict[str, Any]) -> Rubric:
@@ -782,6 +838,7 @@ def cmd_rerun(args) -> int:
         print("RESULTS")
         print("=" * 80 + "\n")
         print_table(results, include_summary=True)
+        print_tool_breakdowns(results)
         print()
     
     return 0
@@ -798,10 +855,17 @@ def cmd_refine(args) -> int:
     Returns:
         Exit code (0 for success, non-zero for error)
     """
-    # Load existing rubric
+    # Load existing rubric (don't require variables - LLM can generate them)
     print(f"Loading rubric from {args.rubric_file}...")
-    rubric = load_rubric(args.rubric_file)
+    variables_file = getattr(args, 'variables_file', None)
+    if variables_file:
+        print(f"   Using variables from: {variables_file}")
+    rubric = load_rubric(args.rubric_file, variables_file=variables_file, require_variables=False)
     print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
+    if rubric.variables:
+        print(f"   Variables: {len(rubric.variables)}")
+    else:
+        print("   Note: No variables defined - LLM will extract them from context")
     
     # Initialize generator
     print(f"\n🤖 Initializing rubric refiner...")
@@ -825,10 +889,18 @@ def cmd_refine(args) -> int:
         print(f"   Content length: {len(input_obj.content)} characters")
         input_type = "chat"
     
+    # Load dimensions file if provided
+    dimensions_to_merge = None
+    if args.dimensions_file:
+        print(f"\nLoading dimensions from {args.dimensions_file}...")
+        dimensions_to_merge = parse_dimensions_file(args.dimensions_file)
+        print(f"✓ Loaded {len(dimensions_to_merge)} dimensions to merge")
+    
     # Refine rubric
     feedback_msg = f" with feedback" if args.feedback else ""
     context_msg = f" using {input_type} context" if input_type else ""
-    print(f"\n🔄 Refining rubric{context_msg}{feedback_msg}...")
+    dims_msg = f" (merging {len(dimensions_to_merge)} dimensions)" if dimensions_to_merge else ""
+    print(f"\n🔄 Refining rubric{context_msg}{feedback_msg}{dims_msg}...")
     if args.feedback:
         print(f"   Feedback: {args.feedback}")
     print("   This may take a moment...")
@@ -837,21 +909,26 @@ def cmd_refine(args) -> int:
         refined_rubric = generator.refine_rubric_with_qa(
             rubric,
             input_obj,
-            feedback=args.feedback
+            feedback=args.feedback,
+            dimensions_to_merge=dimensions_to_merge
         )
     elif input_type == "chat":
         refined_rubric = generator.refine_rubric_with_chat(
             rubric,
             input_obj,
-            feedback=args.feedback
+            feedback=args.feedback,
+            dimensions_to_merge=dimensions_to_merge
         )
     else:
         refined_rubric = generator.refine_rubric(
             rubric,
-            feedback=args.feedback
+            feedback=args.feedback,
+            dimensions_to_merge=dimensions_to_merge
         )
     
     print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
+    if refined_rubric.variables:
+        print(f"   Variables extracted: {len(refined_rubric.variables)}")
     
     # Determine output path and write
     output_path = args.output_file if args.output_file else args.rubric_file
@@ -861,6 +938,559 @@ def cmd_refine(args) -> int:
     
     # Print summary
     print_rubric_summary(refined_rubric, "REFINED RUBRIC SUMMARY")
+    
+    return 0
+
+
+def load_contestant_variables(contestant: ArenaContestant, base_dir: str) -> Optional[Dict[str, str]]:
+    """Load variables for a contestant from inline definition or external file."""
+    # Inline variables take priority
+    if contestant.variables:
+        return contestant.variables
+    
+    # Load from external file if specified
+    if contestant.variables_file:
+        variables_path = os.path.join(base_dir, contestant.variables_file)
+        if not os.path.exists(variables_path):
+            raise FileNotFoundError(f"Variables file not found: {variables_path}")
+        
+        with open(variables_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        # Variables can be at root level or under 'variables' key
+        if "variables" in data:
+            return data["variables"]
+        return data
+    
+    return None
+
+
+def apply_variables_to_rubric(base_rubric: Rubric, variables: Dict[str, str]) -> Rubric:
+    """
+    Create a new Rubric with variable substitution applied to criterion text and tool params.
+    
+    Args:
+        base_rubric: The base rubric with placeholder text
+        variables: Dictionary of variable values to substitute
+        
+    Returns:
+        New Rubric with variables substituted in criterion text and tool params
+    """
+    from rubric_kit.schema import ToolCalls, ToolSpec
+    
+    # Apply substitution to each criterion
+    substituted_criteria = []
+    for crit in base_rubric.criteria:
+        # Substitute in criterion text
+        new_criterion_text = substitute_variables(crit.criterion, variables)
+        
+        # Substitute in tool call params if present
+        new_tool_calls = None
+        if crit.tool_calls:
+            new_required = []
+            for tc in crit.tool_calls.required:
+                new_params = None
+                if tc.params is not None:
+                    new_params = {
+                        k: substitute_variables(v, variables) if isinstance(v, str) else v
+                        for k, v in tc.params.items()
+                    }
+                new_required.append(ToolSpec(
+                    name=tc.name,
+                    min_calls=tc.min_calls,
+                    max_calls=tc.max_calls,
+                    params=new_params
+                ))
+            
+            new_optional = []
+            for tc in crit.tool_calls.optional:
+                new_params = None
+                if tc.params is not None:
+                    new_params = {
+                        k: substitute_variables(v, variables) if isinstance(v, str) else v
+                        for k, v in tc.params.items()
+                    }
+                new_optional.append(ToolSpec(
+                    name=tc.name,
+                    min_calls=tc.min_calls,
+                    max_calls=tc.max_calls,
+                    params=new_params
+                ))
+            
+            new_tool_calls = ToolCalls(
+                respect_order=crit.tool_calls.respect_order,
+                params_strict_mode=crit.tool_calls.params_strict_mode,
+                required=new_required,
+                optional=new_optional,
+                prohibited=crit.tool_calls.prohibited  # Prohibited tools don't need param substitution
+            )
+        
+        substituted_criteria.append(Criterion(
+            name=crit.name,
+            category=crit.category,
+            weight=crit.weight,
+            dimension=crit.dimension,
+            criterion=new_criterion_text,
+            tool_calls=new_tool_calls
+        ))
+    
+    # Also substitute in dimension descriptions
+    substituted_dimensions = []
+    for dim in base_rubric.dimensions:
+        new_description = substitute_variables(dim.description, variables)
+        substituted_dimensions.append(Dimension(
+            name=dim.name,
+            description=new_description,
+            grading_type=dim.grading_type,
+            scores=dim.scores,
+            pass_above=dim.pass_above
+        ))
+    
+    return Rubric(
+        dimensions=substituted_dimensions,
+        criteria=substituted_criteria,
+        variables=variables
+    )
+
+
+def combine_outputs_to_arena(output_files: List[str], arena_name: str = "Combined Arena") -> Dict[str, Any]:
+    """
+    Combine multiple evaluation output files into arena format.
+    
+    Args:
+        output_files: List of paths to output.yaml files
+        arena_name: Name for the combined arena
+        
+    Returns:
+        Arena-formatted data structure
+    """
+    contestants_results: Dict[str, Any] = {}
+    shared_rubric = None
+    shared_judge_panel = None
+    
+    for idx, output_file in enumerate(output_files):
+        print(f"\n[{idx + 1}/{len(output_files)}] Loading: {output_file}")
+        
+        if not os.path.exists(output_file):
+            raise FileNotFoundError(f"Output file not found: {output_file}")
+        
+        with open(output_file, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        
+        # Check if this is already an arena file
+        if data.get("mode") == "arena":
+            raise ValueError(f"File is already an arena result: {output_file}")
+        
+        # Validate required sections
+        if not data.get("results"):
+            raise ValueError(f"File missing 'results' section: {output_file}")
+        
+        # Generate contestant ID from filename or metadata
+        basename = os.path.splitext(os.path.basename(output_file))[0]
+        contestant_id = basename.replace("output_", "").replace("_", "-")
+        
+        # Try to get a better name from metadata
+        metadata = data.get("metadata", {})
+        contestant_name = metadata.get("report_title", basename)
+        
+        # Extract input info
+        input_info = data.get("input", {})
+        
+        print(f"   ID: {contestant_id}")
+        print(f"   Name: {contestant_name}")
+        
+        summary = data.get("summary", {})
+        print(f"   Score: {summary.get('total_score', 0)}/{summary.get('max_score', 0)} ({summary.get('percentage', 0):.1f}%)")
+        
+        # Store contestant results
+        contestants_results[contestant_id] = {
+            "name": contestant_name,
+            "description": f"Loaded from {output_file}",
+            "metadata": {
+                "source_file": output_file,
+                "original_timestamp": metadata.get("timestamp"),
+                "rubric_source": metadata.get("rubric_source_file"),
+                "judge_panel_source": metadata.get("judge_panel_source_file")
+            },
+            "input": input_info,
+            "results": data.get("results", []),
+            "summary": summary
+        }
+        
+        # Use first file's rubric and judge_panel as shared (they should be compatible)
+        if shared_rubric is None and data.get("rubric"):
+            shared_rubric = data["rubric"]
+        if shared_judge_panel is None and data.get("judge_panel"):
+            shared_judge_panel = data["judge_panel"]
+    
+    # Generate rankings
+    rankings = sorted(
+        [
+            {
+                "id": cid,
+                "name": cdata["name"],
+                "percentage": cdata["summary"].get("percentage", 0),
+                "total_score": cdata["summary"].get("total_score", 0),
+                "max_score": cdata["summary"].get("max_score", 0)
+            }
+            for cid, cdata in contestants_results.items()
+        ],
+        key=lambda x: x["percentage"],
+        reverse=True
+    )
+    
+    for idx, r in enumerate(rankings, 1):
+        r["rank"] = idx
+    
+    return {
+        "mode": "arena",
+        "arena_name": arena_name,
+        "arena_description": f"Combined from {len(output_files)} evaluation outputs",
+        "contestants": contestants_results,
+        "rankings": rankings,
+        "rubric": shared_rubric,
+        "judge_panel": shared_judge_panel,
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "source_files": output_files,
+            "combined_from_outputs": True
+        }
+    }
+
+
+def _save_partial_arena_results(
+    output_file: str,
+    arena_name: str,
+    arena_spec: ArenaSpec,
+    contestants_results: Dict[str, Any],
+    base_rubric: Rubric,
+    panel_config: JudgePanelConfig,
+    args
+) -> None:
+    """Save partial arena results after each contestant evaluation."""
+    # Generate rankings from current results
+    rankings = sorted(
+        [
+            {
+                "id": cid,
+                "name": cdata["name"],
+                "percentage": cdata["summary"]["percentage"],
+                "total_score": cdata["summary"]["total_score"],
+                "max_score": cdata["summary"]["max_score"]
+            }
+            for cid, cdata in contestants_results.items()
+        ],
+        key=lambda x: x["percentage"],
+        reverse=True
+    )
+    
+    for idx, r in enumerate(rankings, 1):
+        r["rank"] = idx
+    
+    # Build partial output structure
+    output_data = {
+        "mode": "arena",
+        "arena_name": arena_name,
+        "arena_description": arena_spec.description,
+        "contestants": contestants_results,
+        "rankings": rankings,
+        "rubric": convert_rubric_to_portable_dict(base_rubric),
+        "judge_panel": convert_panel_config_to_portable_dict(panel_config),
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "arena_spec_file": args.arena_spec,
+            "rubric_source_file": arena_spec.rubric_file,
+            "judge_panel_source_file": arena_spec.judges_panel_file,
+            "partial": True  # Indicate this is a partial save
+        }
+    }
+    
+    if args.report_title:
+        output_data["metadata"]["report_title"] = args.report_title
+    
+    # Write to file
+    with open(output_file, 'w', encoding='utf-8') as f:
+        yaml.dump(output_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
+
+
+@handle_command_errors
+def cmd_arena(args) -> int:
+    """
+    Execute the 'arena' subcommand for comparative evaluation.
+    
+    Supports two modes:
+    1. --arena-spec: Run fresh evaluations from arena specification
+    2. --from-outputs: Combine existing output.yaml files into arena format
+    
+    Args:
+        args: Parsed command-line arguments
+        
+    Returns:
+        Exit code (0 for success, non-zero for error)
+    """
+    # Mode 1: Combine existing outputs
+    if args.output_files:
+        print(f"Combining {len(args.output_files)} evaluation outputs into arena format...")
+        
+        arena_name = args.report_title or "Combined Arena Evaluation"
+        output_data = combine_outputs_to_arena(args.output_files, arena_name)
+        
+        # Add report title if provided
+        if args.report_title:
+            output_data["metadata"]["report_title"] = args.report_title
+        
+        # Write YAML output
+        output_file = ensure_yaml_extension(args.output_file)
+        print(f"\nWriting arena results to {output_file}...")
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            yaml.dump(output_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
+        print(f"✓ Arena results written (YAML)")
+        
+        # Generate PDF report if requested
+        if args.report:
+            print(f"\nGenerating Arena PDF report to {args.report}...")
+            try:
+                export_arena_pdf(output_file, args.report)
+                print(f"✓ Arena PDF report generated")
+            except Exception as e:
+                print(f"⚠ PDF generation failed: {e}", file=sys.stderr)
+        
+        # Print rankings summary
+        if not args.no_table:
+            print(f"\n{'='*80}")
+            print("ARENA RANKINGS")
+            print(f"{'='*80}\n")
+            
+            for r in output_data["rankings"]:
+                medal = "🥇" if r["rank"] == 1 else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else "  "))
+                print(f"{medal} #{r['rank']}: {r['name']} - {r['percentage']:.1f}% ({r['total_score']}/{r['max_score']})")
+            print()
+        
+        return 0
+    
+    # Mode 2: Run fresh evaluations from arena spec
+    # Load arena specification
+    print(f"Loading arena specification from {args.arena_spec}...")
+    arena_spec = load_arena_spec(args.arena_spec)
+    arena_name = arena_spec.name or "Arena Evaluation"
+    print(f"✓ Loaded arena: {arena_name}")
+    print(f"   Contestants: {len(arena_spec.contestants)}")
+    
+    # Check for existing results (resume support)
+    output_file = ensure_yaml_extension(args.output_file)
+    existing_results: Dict[str, Any] = {}
+    
+    if os.path.exists(output_file) and not getattr(args, 'force', False):
+        print(f"\n📂 Found existing results in {output_file}")
+        try:
+            with open(output_file, 'r', encoding='utf-8') as f:
+                existing_data = yaml.safe_load(f)
+            if existing_data and existing_data.get("mode") == "arena":
+                existing_results = existing_data.get("contestants", {})
+                print(f"   ✓ Loaded {len(existing_results)} cached contestant results")
+                print("   (Use --force to re-evaluate all)")
+        except Exception as e:
+            print(f"   ⚠ Could not load existing results: {e}")
+    elif getattr(args, 'force', False):
+        print("\n🔄 Force mode: will re-evaluate all contestants")
+    
+    # Get base directory for relative paths
+    base_dir = os.path.dirname(os.path.abspath(args.arena_spec))
+    
+    # Load shared rubric
+    rubric_path = os.path.join(base_dir, arena_spec.rubric_file)
+    print(f"\nLoading shared rubric from {rubric_path}...")
+    # Load rubric without variables initially - we'll apply per-contestant
+    base_rubric = load_rubric(rubric_path, require_variables=False)
+    print(f"✓ Loaded {len(base_rubric.dimensions)} dimensions and {len(base_rubric.criteria)} criteria")
+    
+    # Load shared judge panel
+    panel_path = os.path.join(base_dir, arena_spec.judges_panel_file)
+    print(f"\nLoading judge panel from {panel_path}...")
+    panel_config = load_judge_panel_config(panel_path)
+    print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
+    print_evaluation_config(panel_config)
+    
+    # Dictionary to hold all contestant results (start with cached)
+    contestants_results: Dict[str, Any] = dict(existing_results)
+    failed_contestants: List[str] = []
+    skipped_count = 0
+    evaluated_count = 0
+    
+    # Evaluate each contestant
+    print(f"\n{'='*80}")
+    print("ARENA EVALUATION")
+    print(f"{'='*80}")
+    
+    for idx, contestant in enumerate(arena_spec.contestants, 1):
+        # Check if already cached
+        if contestant.id in existing_results:
+            cached = existing_results[contestant.id]
+            cached_pct = cached.get("summary", {}).get("percentage", 0)
+            print(f"\n[{idx}/{len(arena_spec.contestants)}] {contestant.name} (id: {contestant.id})")
+            print(f"   ⏭️  Skipped (cached: {cached_pct:.1f}%)")
+            skipped_count += 1
+            continue
+        
+        print(f"\n[{idx}/{len(arena_spec.contestants)}] Evaluating: {contestant.name} (id: {contestant.id})")
+        
+        try:
+            # Load contestant-specific variables if any
+            contestant_vars = load_contestant_variables(contestant, base_dir)
+            
+            # Create a rubric with contestant-specific variables (with substitution applied)
+            if contestant_vars:
+                rubric = apply_variables_to_rubric(base_rubric, contestant_vars)
+                print(f"   Variables: {len(contestant_vars)}")
+            else:
+                rubric = base_rubric
+            
+            # Resolve input file path
+            input_path = os.path.join(base_dir, contestant.input_file)
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"Input file not found: {input_path}")
+            
+            # Evaluate based on input type
+            print(f"   Input: {contestant.input_type} from {contestant.input_file}")
+            
+            if contestant.input_type == "qna":
+                evaluations = evaluate_rubric_with_panel_from_qa(
+                    rubric, input_path, panel_config
+                )
+            else:
+                evaluations = evaluate_rubric_with_panel(
+                    rubric, input_path, panel_config
+                )
+            
+            # Process scores
+            results = evaluate_rubric(rubric, evaluations)
+            total_score, max_score = calculate_total_score(results)
+            percentage = calculate_percentage_score(results)
+            
+            print(f"   ✓ Score: {total_score}/{max_score} ({percentage:.1f}%)")
+            
+            # Store contestant results
+            contestants_results[contestant.id] = {
+                "name": contestant.name,
+                "description": contestant.description,
+                "metadata": contestant.metadata,
+                "input": {
+                    "type": contestant.input_type,
+                    "source_file": contestant.input_file
+                },
+                "results": results,
+                "summary": {
+                    "total_score": total_score,
+                    "max_score": max_score,
+                    "percentage": round(percentage, 1)
+                }
+            }
+            evaluated_count += 1
+            
+            # Save partial results after each successful evaluation
+            _save_partial_arena_results(
+                output_file, arena_name, arena_spec, contestants_results,
+                base_rubric, panel_config, args
+            )
+            
+        except Exception as e:
+            print(f"   ❌ Failed: {e}", file=sys.stderr)
+            failed_contestants.append(contestant.id)
+            # Continue with next contestant instead of failing completely
+            continue
+    
+    # Summary of evaluation
+    print(f"\n{'='*80}")
+    print("EVALUATION SUMMARY")
+    print(f"{'='*80}")
+    print(f"   Evaluated: {evaluated_count}")
+    print(f"   Skipped (cached): {skipped_count}")
+    print(f"   Failed: {len(failed_contestants)}")
+    if failed_contestants:
+        print(f"   Failed IDs: {', '.join(failed_contestants)}")
+        print("   (Fix the issues and re-run to complete these evaluations)")
+    
+    # Generate final rankings
+    rankings = sorted(
+        [
+            {
+                "id": cid,
+                "name": cdata["name"],
+                "percentage": cdata["summary"]["percentage"],
+                "total_score": cdata["summary"]["total_score"],
+                "max_score": cdata["summary"]["max_score"]
+            }
+            for cid, cdata in contestants_results.items()
+        ],
+        key=lambda x: x["percentage"],
+        reverse=True
+    )
+    
+    # Add rank
+    for idx, r in enumerate(rankings, 1):
+        r["rank"] = idx
+    
+    # Build final output structure
+    output_data = {
+        "mode": "arena",
+        "arena_name": arena_name,
+        "arena_description": arena_spec.description,
+        
+        "contestants": contestants_results,
+        "rankings": rankings,
+        
+        # Shared configuration
+        "rubric": convert_rubric_to_portable_dict(base_rubric),
+        "judge_panel": convert_panel_config_to_portable_dict(panel_config),
+        
+        "metadata": {
+            "timestamp": datetime.now().isoformat(),
+            "arena_spec_file": args.arena_spec,
+            "rubric_source_file": arena_spec.rubric_file,
+            "judge_panel_source_file": arena_spec.judges_panel_file
+        }
+    }
+    
+    # Mark as partial if there were failures
+    if failed_contestants:
+        output_data["metadata"]["partial"] = True
+        output_data["metadata"]["failed_contestants"] = failed_contestants
+    
+    # Add report title if provided
+    if args.report_title:
+        output_data["metadata"]["report_title"] = args.report_title
+    
+    # Write final YAML output
+    print(f"\nWriting arena results to {output_file}...")
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        yaml.dump(output_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
+    
+    if failed_contestants:
+        print(f"✓ Arena results written (YAML) - {len(failed_contestants)} contestant(s) pending")
+    else:
+        print(f"✓ Arena results written (YAML) - complete")
+    
+    # Generate PDF report if requested
+    if args.report:
+        print(f"\nGenerating Arena PDF report to {args.report}...")
+        try:
+            export_arena_pdf(output_file, args.report)
+            print(f"✓ Arena PDF report generated")
+        except Exception as e:
+            print(f"⚠ PDF generation failed: {e}", file=sys.stderr)
+    
+    # Print rankings summary
+    if not args.no_table:
+        print(f"\n{'='*80}")
+        print("ARENA RANKINGS")
+        print(f"{'='*80}\n")
+        
+        for r in rankings:
+            medal = "🥇" if r["rank"] == 1 else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else "  "))
+            print(f"{medal} #{r['rank']}: {r['name']} - {r['percentage']:.1f}% ({r['total_score']}/{r['max_score']})")
+        print()
     
     return 0
 
@@ -923,6 +1553,11 @@ Examples:
         '--rubric-file',
         required=True,
         help='Path to rubric YAML file'
+    )
+    
+    evaluate_parser.add_argument(
+        '--variables-file',
+        help='Path to variables YAML file (required if rubric has placeholders but no embedded variables)'
     )
     
     evaluate_parser.add_argument(
@@ -1039,6 +1674,11 @@ Examples:
     )
     
     generate_parser.add_argument(
+        '--dimensions-file',
+        help='Path to dimensions YAML file (skips dimension generation, uses provided dimensions)'
+    )
+    
+    generate_parser.add_argument(
         '--api-key',
         help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
     )
@@ -1086,6 +1726,11 @@ Examples:
         help='Path to existing rubric YAML file'
     )
     
+    refine_parser.add_argument(
+        '--variables-file',
+        help='Path to variables YAML file (provides variable values for rubrics with placeholders)'
+    )
+    
     # Mutually exclusive input format options (optional for refine)
     refine_input_group = refine_parser.add_mutually_exclusive_group(required=False)
     refine_input_group.add_argument(
@@ -1107,6 +1752,11 @@ Examples:
     refine_parser.add_argument(
         '--feedback',
         help='Specific feedback for refinement (optional)'
+    )
+    
+    refine_parser.add_argument(
+        '--dimensions-file',
+        help='Path to dimensions YAML file (merges with existing rubric dimensions)'
     )
     
     refine_parser.add_argument(
@@ -1241,6 +1891,69 @@ Examples:
     )
     
     rerun_parser.set_defaults(func=cmd_rerun)
+    
+    # ========== ARENA subcommand ==========
+    arena_parser = subparsers.add_parser(
+        'arena',
+        help='Run comparative evaluation of multiple contestants against a shared rubric',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Mode 1: Run fresh evaluations from arena spec
+  %(prog)s --arena-spec arena.yaml --output-file arena_results.yaml
+  %(prog)s --arena-spec arena.yaml --output-file arena_results.yaml --report arena_report.pdf
+  
+  # Mode 2: Combine existing output.yaml files into arena comparison
+  %(prog)s --from-outputs output1.yaml output2.yaml output3.yaml --output-file arena_results.yaml
+  %(prog)s --from-outputs *.yaml --output-file arena_results.yaml --report arena_report.pdf --report-title "Model Comparison"
+"""
+    )
+    
+    # Two modes: --arena-spec (run evaluations) OR --from-outputs (combine existing)
+    arena_input_group = arena_parser.add_mutually_exclusive_group(required=True)
+    arena_input_group.add_argument(
+        '--arena-spec',
+        dest='arena_spec',
+        help='Path to arena specification YAML file (runs fresh evaluations)'
+    )
+    arena_input_group.add_argument(
+        '--from-outputs',
+        dest='output_files',
+        nargs='+',
+        metavar='OUTPUT_FILE',
+        help='Combine multiple existing output.yaml files into arena results'
+    )
+    
+    arena_parser.add_argument(
+        '--output-file', '-o',
+        required=True,
+        help='Path to output YAML file with aggregated results'
+    )
+    
+    arena_parser.add_argument(
+        '--report',
+        help='Path to generate Arena PDF report (optional)'
+    )
+    
+    arena_parser.add_argument(
+        '--report-title',
+        dest='report_title',
+        help='Custom title for the Arena PDF report (optional)'
+    )
+    
+    arena_parser.add_argument(
+        '--no-table',
+        action='store_true',
+        help='Do not print rankings table to console'
+    )
+    
+    arena_parser.add_argument(
+        '--force',
+        action='store_true',
+        help='Force re-evaluation of all contestants (ignore cached results)'
+    )
+    
+    arena_parser.set_defaults(func=cmd_arena)
     
     # Parse arguments
     args = parser.parse_args()

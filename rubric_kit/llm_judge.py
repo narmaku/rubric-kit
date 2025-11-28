@@ -20,6 +20,16 @@ from rubric_kit.execution import execute_judges
 from rubric_kit.consensus import apply_binary_consensus, apply_score_consensus
 from rubric_kit.parser import parse_chat_session, ChatSession
 from rubric_kit.generator import parse_qa_input
+from rubric_kit.tool_evaluator import (
+    evaluate_tool_calls_programmatic,
+    build_param_validation_prompt,
+    build_summary_prompt,
+    apply_param_validation_results,
+    parse_param_validation_response,
+    parse_summary_response,
+    breakdown_to_dict,
+    ToolBreakdown,
+)
 
 
 def read_chat_session(file_path: str) -> str:
@@ -152,6 +162,86 @@ def _prepare_tool_call_evaluation(
     return prompt, "tool_call"
 
 
+def _evaluate_tool_calls_hybrid(
+    criterion: Criterion,
+    parsed_session: Optional[ChatSession],
+    judge_config: JudgeConfig
+) -> Tuple[ToolBreakdown, bool, float]:
+    """
+    Evaluate tool calls using hybrid approach: programmatic + LLM.
+    
+    Uses 0-3 scoring model:
+    - 3: All checks pass (presence ✓, count ✓, order ✓, params ✓)
+    - 2: Called with correct order + params, but wrong count
+    - 1: Called but wrong params OR wrong order
+    - 0: Not called at all
+    
+    Steps:
+    1. Programmatic: presence, count, order checks
+    2. LLM: parameter semantic validation
+    3. LLM: summary generation
+    
+    Returns:
+        Tuple of (ToolBreakdown, overall_pass, overall_score)
+        - overall_score is 0.0-3.0 weighted average
+    """
+    # Step 1: Programmatic evaluation
+    breakdown = evaluate_tool_calls_programmatic(criterion, parsed_session)
+    
+    # Step 2: LLM parameter validation (if needed)
+    param_prompt = build_param_validation_prompt(breakdown)
+    if param_prompt:
+        try:
+            client = _create_openai_client(judge_config)
+            response = _call_llm(client, judge_config, param_prompt, EVALUATOR_CONFIG)
+            validation_results = parse_param_validation_response(response)
+            apply_param_validation_results(breakdown, validation_results)
+        except Exception as e:
+            print(f"Warning: Parameter validation failed: {e}")
+            # Continue without param validation - programmatic results stand
+    
+    # Step 3: LLM summary generation
+    summary_prompt = build_summary_prompt(breakdown)
+    try:
+        client = _create_openai_client(judge_config)
+        response = _call_llm(client, judge_config, summary_prompt, EVALUATOR_CONFIG)
+        breakdown.summary = parse_summary_response(response)
+    except Exception as e:
+        print(f"Warning: Summary generation failed: {e}")
+        # Generate a basic summary from the data
+        status = "passed" if breakdown.overall_pass else "failed"
+        breakdown.summary = f"Tool evaluation {status} with score {breakdown.overall_score:.1f}/3."
+    
+    return breakdown, breakdown.overall_pass, breakdown.overall_score
+
+
+def _evaluate_tool_criterion_with_breakdown(
+    judge_config: JudgeConfig,
+    criterion: Criterion,
+    chat_content: str,
+    dimension: Optional[Dimension],
+    parsed_session: Optional[ChatSession]
+) -> Dict[str, Any]:
+    """
+    Evaluate a tool call criterion using hybrid approach.
+    
+    Returns evaluation result with:
+    - passes: boolean pass/fail
+    - score: 0-3 integer score (rounded from weighted average)
+    - tool_breakdown: detailed per-tool results
+    """
+    breakdown, passes, overall_score = _evaluate_tool_calls_hybrid(
+        criterion, parsed_session, judge_config
+    )
+    
+    return {
+        "passes": passes,
+        "score": round(overall_score),  # 0-3 integer score
+        "reason": breakdown.summary,
+        "tool_breakdown": breakdown_to_dict(breakdown)
+    }
+
+
 def _prepare_evaluation_prompt(
     criterion: Criterion,
     chat_content: str,
@@ -265,6 +355,7 @@ def _single_judge_evaluate(
     Evaluate a criterion using a single judge.
     
     This is the function passed to execute_judges for each judge.
+    For tool call criteria, uses hybrid approach (programmatic + LLM).
     
     Args:
         judge_config: Configuration for this judge
@@ -276,6 +367,13 @@ def _single_judge_evaluate(
     Returns:
         Evaluation result dictionary
     """
+    # Use hybrid approach for tool call criteria
+    if criterion.tool_calls:
+        return _evaluate_tool_criterion_with_breakdown(
+            judge_config, criterion, chat_content, dimension, parsed_session
+        )
+    
+    # Standard LLM-only evaluation for non-tool criteria
     client = _create_openai_client(judge_config)
     prompt, evaluation_type, config = _prepare_evaluation_prompt(
         criterion, chat_content, dimension, parsed_session
@@ -303,9 +401,43 @@ def _is_binary_evaluation(dimension: Optional[Dimension], criterion: Criterion) 
     return grading_type == "binary"
 
 
+def _extract_tool_breakdown(
+    judge_votes: List[Dict[str, Any]],
+    consensus_result: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Extract tool_breakdown from judge votes, preferring agreeing judges.
+    
+    When a consensus result is provided, prioritizes breakdowns from judges
+    that agreed with the final result. This ensures the breakdown shown
+    matches the evaluation outcome.
+    
+    Args:
+        judge_votes: List of judge vote dictionaries
+        consensus_result: Optional consensus result with 'passes' or 'score' key
+        
+    Returns:
+        Tool breakdown dictionary from an agreeing judge, or any available
+        breakdown as fallback, or None if no breakdown exists.
+    """
+    # First, try to find breakdown from a judge that agrees with the consensus
+    if consensus_result is not None:
+        agreeing_votes = _get_agreeing_judges(judge_votes, consensus_result)
+        for vote in agreeing_votes:
+            if "tool_breakdown" in vote:
+                return vote["tool_breakdown"]
+    
+    # Fallback: return first available breakdown (original behavior)
+    for vote in judge_votes:
+        if "tool_breakdown" in vote:
+            return vote["tool_breakdown"]
+    
+    return None
+
+
 def _build_binary_result(consensus_result: Dict[str, Any]) -> Dict[str, Any]:
     """Build binary evaluation result from consensus."""
-    return {
+    result = {
         "type": "binary",
         "passes": consensus_result["passes"],
         "consensus_reached": consensus_result["consensus_reached"],
@@ -313,6 +445,20 @@ def _build_binary_result(consensus_result: Dict[str, Any]) -> Dict[str, Any]:
         "judge_votes": consensus_result["judge_votes"],
         "reason": _build_consensus_reason(consensus_result)
     }
+    
+    # Preserve tool_breakdown if present (from hybrid tool evaluation)
+    # Pass consensus_result to prefer breakdown from agreeing judges
+    tool_breakdown = _extract_tool_breakdown(
+        consensus_result["judge_votes"], 
+        consensus_result
+    )
+    if tool_breakdown:
+        result["tool_breakdown"] = tool_breakdown
+        # Include score from tool evaluation (0-3 scale) at top level for easy access
+        if "overall_score" in tool_breakdown:
+            result["score"] = round(tool_breakdown["overall_score"])
+    
+    return result
 
 
 def _build_score_result(consensus_result: Dict[str, Any]) -> Dict[str, Any]:

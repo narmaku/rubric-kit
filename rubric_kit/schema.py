@@ -1,6 +1,6 @@
 """Pydantic models for rubric YAML validation."""
 
-from typing import Dict, List, Optional, Union, Literal
+from typing import Any, Dict, List, Optional, Union, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -131,7 +131,15 @@ class ToolSpec(BaseModel):
 
 
 class ToolCalls(BaseModel):
-    """Tool calls specification for a criterion."""
+    """Tool calls specification for a criterion.
+    
+    Scoring is inferred from which tool lists are populated:
+    - required: Tools that MUST be called (Pass = weight, Fail = 0)
+    - optional: Tools that give bonus points if called (Pass = bonus, Fail = 0)
+    - prohibited: Tools that MUST NOT be called (Violation = penalty)
+    
+    A criterion can have any combination of these lists.
+    """
     respect_order: bool = Field(True, description="Whether tool call order matters")
     required: List[ToolSpec] = Field(default_factory=list, description="Required tool calls")
     optional: List[ToolSpec] = Field(default_factory=list, description="Optional tool calls")
@@ -196,6 +204,19 @@ class Rubric(BaseModel):
     """Complete rubric with dimensions and criteria."""
     dimensions: List[Dimension] = Field(..., description="List of dimensions")
     criteria: List[Criterion] = Field(..., description="List of criteria")
+    variables: Optional[Dict[str, Any]] = Field(None, description="Variables for placeholder substitution in criteria")
+
+    @field_validator('variables', mode='before')
+    @classmethod
+    def coerce_variables_to_strings(cls, v):
+        """Coerce all variable values to strings.
+        
+        LLMs sometimes return numeric values for variables that should be strings.
+        Since variables are used for text substitution, we coerce all values to strings.
+        """
+        if v is None:
+            return v
+        return {key: str(value) for key, value in v.items()}
 
     @model_validator(mode='after')
     def validate_dimension_references(self):
@@ -213,4 +234,60 @@ class Rubric(BaseModel):
     def get_dimension(self, name: str) -> Optional[Dimension]:
         """Get a dimension by name."""
         return next((d for d in self.dimensions if d.name == name), None)
+
+
+# ============================================================================
+# Arena Models
+# ============================================================================
+
+class ArenaContestant(BaseModel):
+    """A contestant in an arena evaluation."""
+    id: str = Field(..., description="Unique identifier for this contestant")
+    name: str = Field(..., description="Display name for this contestant")
+    input_type: Literal["chat_session", "qna"] = Field(
+        "chat_session",
+        description="Type of input: chat_session or qna"
+    )
+    input_file: str = Field(..., description="Path to input file")
+    variables: Optional[Dict[str, str]] = Field(
+        None,
+        description="Inline variables for rubric placeholder substitution"
+    )
+    variables_file: Optional[str] = Field(
+        None,
+        description="Path to external variables file"
+    )
+    metadata: Optional[Dict[str, Union[str, int, float, bool]]] = Field(
+        None,
+        description="Custom metadata (e.g., model version, temperature)"
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Human-readable description of this contestant"
+    )
+
+
+class ArenaSpec(BaseModel):
+    """Specification for an arena comparative evaluation."""
+    name: Optional[str] = Field(None, description="Name of this arena evaluation")
+    description: Optional[str] = Field(None, description="Description of the arena")
+    rubric_file: str = Field(..., description="Path to the shared rubric file")
+    judges_panel_file: str = Field(..., description="Path to the shared judges panel file")
+    contestants: List[ArenaContestant] = Field(
+        ...,
+        min_length=1,
+        description="List of contestants to evaluate"
+    )
+
+    @model_validator(mode='after')
+    def validate_unique_contestant_ids(self):
+        """Validate that all contestant IDs are unique."""
+        ids = [c.id for c in self.contestants]
+        if len(ids) != len(set(ids)):
+            seen = set()
+            for cid in ids:
+                if cid in seen:
+                    raise ValueError(f"Duplicate contestant id: '{cid}'")
+                seen.add(cid)
+        return self
 

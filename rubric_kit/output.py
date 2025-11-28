@@ -352,6 +352,90 @@ def print_table(results: List[Dict[str, Any]], include_summary: bool = True) -> 
     print(table)
 
 
+def _format_tool_breakdown_row(tool_result: Dict[str, Any]) -> List[str]:
+    """Format a single tool result into a table row."""
+    called = "✓" if tool_result.get("called") else "✗"
+    count_ok = "✓" if tool_result.get("count_ok") else "✗"
+    params_ok = tool_result.get("params_ok")
+    params = "✓" if params_ok else ("✗" if params_ok is False else "N/A")
+    
+    score = tool_result.get("score", 0)
+    max_score = tool_result.get("max_score", 0)
+    
+    return [
+        tool_result.get("name", ""),  # Full tool name, no truncation
+        tool_result.get("type", ""),
+        called,
+        f"{tool_result.get('count', 0)} {count_ok}",
+        params,
+        f"{score:.1f}/{max_score:.1f}"
+    ]
+
+
+def format_tool_breakdown(breakdown: Dict[str, Any]) -> str:
+    """
+    Format a tool breakdown as a pretty table.
+    
+    Args:
+        breakdown: Tool breakdown dictionary with tool_results
+        
+    Returns:
+        Formatted table string
+    """
+    tool_results = breakdown.get("tool_results", [])
+    if not tool_results:
+        return ""
+    
+    # Header info
+    order_status = "✓" if breakdown.get("order_ok") else ("✗" if breakdown.get("order_ok") is False else "N/A")
+    header = f"Score: {breakdown.get('overall_score', 0):.1f}/3 | Order: {order_status}"
+    
+    # Table
+    headers = ["Tool", "Type", "Called", "Count", "Params", "Score"]
+    rows = [_format_tool_breakdown_row(tr) for tr in tool_results]
+    
+    table = tabulate(rows, headers=headers, tablefmt="simple")
+    
+    # Issues
+    issues = breakdown.get("issues", [])
+    issues_text = ""
+    if issues:
+        issues_text = "\nIssues:\n" + "\n".join(f"  • {issue}" for issue in issues[:5])
+    
+    # Summary
+    summary = breakdown.get("summary", "")
+    summary_text = f"\nSummary: {summary}" if summary else ""
+    
+    return f"{header}\n{table}{issues_text}{summary_text}"
+
+
+def print_tool_breakdowns(results: List[Dict[str, Any]]) -> None:
+    """
+    Print tool breakdowns for all results that have them.
+    
+    Args:
+        results: List of evaluation results (some may have tool_breakdown)
+    """
+    breakdowns = [
+        (r.get("criterion_name", "unknown"), r["tool_breakdown"])
+        for r in results
+        if r.get("tool_breakdown")
+    ]
+    
+    if not breakdowns:
+        return
+    
+    print("\n" + "=" * 60)
+    print("TOOL CALLS BREAKDOWNS")
+    print("=" * 60)
+    
+    for criterion_name, breakdown in breakdowns:
+        print(f"\n--- {criterion_name} ---")
+        print(format_tool_breakdown(breakdown))
+    
+    print()
+
+
 def _load_yaml_data(input_path: str) -> Dict[str, Any]:
     """
     Load data from a YAML file.

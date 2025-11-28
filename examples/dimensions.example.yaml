@@ -1,0 +1,37 @@
+# Example dimensions file for rubric-kit
+# Use with: rubric-kit generate --dimensions-file dimensions.yaml ...
+# Or with: rubric-kit refine --dimensions-file dimensions.yaml ...
+
+dimensions:
+  # Binary dimension (pass/fail)
+  - name: factual_accuracy
+    description: "Evaluates whether stated facts and data values are correct"
+    grading_type: binary
+
+  # Binary dimension for tool usage
+  - name: tool_usage
+    description: "Evaluates whether the correct tools were used appropriately"
+    grading_type: binary
+
+  # Score-based dimension with custom scale
+  - name: completeness
+    description: "Evaluates whether all requested information is provided"
+    grading_type: score
+    scores:
+      0: "No relevant information provided"
+      1: "Missing most key information"
+      2: "Partially complete, missing some details"
+      3: "Complete with all essential information"
+
+  # Score-based dimension for quality
+  - name: clarity
+    description: "Evaluates the readability and organization of the response"
+    grading_type: score
+    scores:
+      0: "Completely unintelligible or no response"
+      1: "Poorly organized or difficult to understand"
+      2: "Generally clear but could be improved"
+      3: "Exceptionally clear and well-organized"
+
+
+

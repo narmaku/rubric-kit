@@ -4,7 +4,7 @@ import yaml
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Any, Union
+from typing import Dict, List, Any, Union, Optional
 from pydantic import ValidationError
 
 from rubric_kit.schema import (
@@ -60,6 +60,50 @@ def expand_env_vars(data: Any) -> Any:
         return re.sub(pattern, _replace_env_var, data)
     
     return data
+
+
+def substitute_variables(text: Optional[str], variables: Dict[str, str]) -> Optional[str]:
+    """
+    Substitute variable placeholders in text with their values.
+    
+    Uses {{variable_name}} syntax for placeholders.
+    
+    Args:
+        text: Text containing variable placeholders (or None)
+        variables: Dictionary mapping variable names to values
+        
+    Returns:
+        Text with variables substituted, or None if input was None
+        
+    Raises:
+        RubricValidationError: If a variable placeholder references an undefined variable
+    """
+    if text is None:
+        return None
+    
+    if not variables:
+        # Check if there are any placeholders that would be unresolved
+        pattern = r'\{\{([^}]+)\}\}'
+        match = re.search(pattern, text)
+        if match:
+            var_name = match.group(1).strip()
+            raise RubricValidationError(
+                f"Undefined variable '{var_name}' in criterion text. "
+                f"Add it to the 'variables' section of the rubric."
+            )
+        return text
+    
+    def replace_var(match: re.Match) -> str:
+        var_name = match.group(1).strip()
+        if var_name not in variables:
+            raise RubricValidationError(
+                f"Undefined variable '{var_name}' in criterion text. "
+                f"Defined variables: {', '.join(sorted(variables.keys()))}"
+            )
+        return variables[var_name]
+    
+    pattern = r'\{\{([^}]+)\}\}'
+    return re.sub(pattern, replace_var, text)
 
 
 def _parse_pure_nested_item(item: Dict) -> Dict:
@@ -247,26 +291,183 @@ def _parse_criteria(criteria_data: Any) -> List[Criterion]:
     return criteria
 
 
-def load_rubric(yaml_path: str) -> Rubric:
+def _parse_variables(variables_data: Any) -> Optional[Dict[str, str]]:
+    """Parse variables from YAML data."""
+    if not variables_data:
+        return None
+    
+    if not isinstance(variables_data, dict):
+        raise RubricValidationError("'variables' must be a dictionary")
+    
+    # Ensure all values are strings
+    variables = {}
+    for key, value in variables_data.items():
+        if not isinstance(key, str):
+            raise RubricValidationError(f"Variable name must be a string, got: {type(key).__name__}")
+        variables[key] = str(value) if value is not None else ""
+    
+    return variables
+
+
+def load_variables_file(yaml_path: str) -> Dict[str, str]:
+    """
+    Load variables from a YAML file.
+    
+    Args:
+        yaml_path: Path to the variables YAML file
+        
+    Returns:
+        Dictionary of variable names to values
+        
+    Raises:
+        RubricValidationError: If the file is invalid
+    """
+    yaml_file = Path(yaml_path)
+    
+    if not yaml_file.exists():
+        raise RubricValidationError(f"Variables file not found: {yaml_path}")
+    
+    try:
+        with open(yaml_file, 'r') as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise RubricValidationError(f"Invalid YAML syntax in variables file: {e}")
+    
+    if not isinstance(data, dict):
+        raise RubricValidationError("Variables file must contain a dictionary of key-value pairs")
+    
+    # Expand environment variables in the loaded data
+    data = expand_env_vars(data)
+    
+    variables = _parse_variables(data)
+    if variables is None:
+        raise RubricValidationError("Variables file is empty")
+    
+    return variables
+
+
+def _substitute_variables_in_tool_calls(
+    tool_calls: ToolCalls,
+    variables: Dict[str, str]
+) -> ToolCalls:
+    """Substitute variables in tool_calls params."""
+    def substitute_in_tool_spec(spec: ToolSpec) -> ToolSpec:
+        if spec.params is None:
+            return spec
+        
+        # Substitute variables in each param value
+        new_params = {}
+        for key, value in spec.params.items():
+            if isinstance(value, str):
+                new_params[key] = substitute_variables(value, variables)
+            else:
+                new_params[key] = value
+        
+        return ToolSpec(
+            name=spec.name,
+            min_calls=spec.min_calls,
+            max_calls=spec.max_calls,
+            params=new_params
+        )
+    
+    return ToolCalls(
+        respect_order=tool_calls.respect_order,
+        required=[substitute_in_tool_spec(spec) for spec in tool_calls.required],
+        optional=[substitute_in_tool_spec(spec) for spec in tool_calls.optional],
+        prohibited=tool_calls.prohibited,  # Prohibited don't have params
+        params_strict_mode=tool_calls.params_strict_mode
+    )
+
+
+def _substitute_variables_in_criteria(
+    criteria: List[Criterion],
+    variables: Optional[Dict[str, str]]
+) -> List[Criterion]:
+    """Substitute variables in all criteria's criterion text and tool_calls params."""
+    if not variables:
+        # Still need to check for undefined variables
+        for crit in criteria:
+            if crit.criterion and crit.criterion != "from_scores":
+                substitute_variables(crit.criterion, {})
+        return criteria
+    
+    substituted_criteria = []
+    for crit in criteria:
+        new_criterion_text = crit.criterion
+        new_tool_calls = crit.tool_calls
+        
+        # Substitute in criterion text
+        if crit.criterion and crit.criterion != "from_scores":
+            new_criterion_text = substitute_variables(crit.criterion, variables)
+        
+        # Substitute in tool_calls params
+        if crit.tool_calls:
+            new_tool_calls = _substitute_variables_in_tool_calls(crit.tool_calls, variables)
+        
+        substituted_criteria.append(Criterion(
+            name=crit.name,
+            category=crit.category,
+            weight=crit.weight,
+            dimension=crit.dimension,
+            criterion=new_criterion_text,
+            tool_calls=new_tool_calls
+        ))
+    
+    return substituted_criteria
+
+
+def load_rubric(
+    yaml_path: str,
+    variables_file: Optional[str] = None,
+    require_variables: bool = True
+) -> Rubric:
     """
     Load and validate a rubric from a YAML file.
     
+    Supports variable substitution using {{variable_name}} syntax in criterion text
+    and tool_calls params. Variables can be:
+    - Embedded in the rubric YAML under the 'variables' section
+    - Provided via a separate variables file (overrides embedded variables)
+    
     Args:
-        yaml_path: Path to the YAML file
+        yaml_path: Path to the rubric YAML file
+        variables_file: Optional path to external variables YAML file
+        require_variables: If True (default), raises error for undefined variables.
+            If False, keeps placeholders intact (useful for refine/generate commands).
         
     Returns:
-        Validated Rubric object
+        Validated Rubric object with variables substituted in criteria
         
     Raises:
-        RubricValidationError: If the file is invalid or validation fails
+        RubricValidationError: If the file is invalid, validation fails, or
+            required variables are missing (when require_variables=True)
     """
     data = _load_yaml_file(yaml_path)
+    
+    # Parse embedded variables
+    embedded_variables = _parse_variables(data.get("variables"))
+    
+    # Load external variables if provided (override embedded)
+    if variables_file:
+        external_variables = load_variables_file(variables_file)
+        # Merge: external overrides embedded
+        if embedded_variables:
+            variables = {**embedded_variables, **external_variables}
+        else:
+            variables = external_variables
+    else:
+        variables = embedded_variables
     
     dimensions = _parse_dimensions(data.get("dimensions"))
     criteria = _parse_criteria(data.get("criteria"))
     
+    # Substitute variables in criteria if we have them or require them
+    if variables or require_variables:
+        criteria = _substitute_variables_in_criteria(criteria, variables)
+    # else: keep placeholders intact (for refine/generate when no variables available)
+    
     try:
-        return Rubric(dimensions=dimensions, criteria=criteria)
+        return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     except ValidationError as e:
         raise RubricValidationError(f"Validation error: {e}")
 

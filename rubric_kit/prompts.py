@@ -760,8 +760,13 @@ Each dimension should:
 1. Have a unique, descriptive name (lowercase with underscores, e.g., "factual_correctness")
 2. Have a **GENERIC** description of what aspect it evaluates
 3. **DO NOT** mention specific data values or fields in the dimension description
-4. Specify a grading_type: either "binary" (pass/fail) or "score" (numeric scale from 1 to 3)
-5. For "score" type, include a scores dictionary with integer keys and description values
+4. Specify a grading_type: either "binary" (pass/fail) or "score" (numeric scale from 0 to 3)
+5. For "score" type, you MUST include a "scores" dictionary with integer keys (0-3) and description values
+
+**CRITICAL - Score Dimensions:**
+- If grading_type is "score", the "scores" field is REQUIRED - do NOT set it to null or omit it
+- Scores must have keys 0, 1, 2, 3 with string descriptions for each level
+- If you don't need nuanced scoring, use grading_type "binary" instead
 
 **CRITICAL - Dimension Design:**
 - Dimensions should be GENERIC and reusable (e.g., "factual_correctness" not "cpu_count_correctness")
@@ -789,6 +794,7 @@ Return ONLY a JSON array of dimension objects. Example format:
     "description": "Evaluates how complete and comprehensive the answer is",
     "grading_type": "score",
     "scores": {{
+      "0": "No relevant information provided",
       "1": "Missing most key information",
       "2": "Partially complete, missing some key details",
       "3": "Complete with all essential information"
@@ -848,37 +854,65 @@ Answer: {answer}{context_info}
 Dimensions:
 {dimensions_str}{category_guidance}
 
+**IMPORTANT - Variables Section:**
+Extract specific data values from the answer (names, numbers, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{{{variable_name}}}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values. This makes the rubric reusable with different data.
+
 Criteria should be:
-1. Specific and measurable
-2. Distributed across the provided dimensions
-3. Assigned appropriate categories (e.g., Output, Reasoning, Completeness)
-4. Given weights between 1-3 based on importance (3=most important)
-5. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
+1. **ATOMIC** - each criterion checks exactly ONE specific thing (one fact, one value, one requirement)
+2. **Use variables for specific values** - extract specific data values to the variables section and reference them using {{{{variable_name}}}} syntax
+3. **Never mix multiple values in one factual accuracy criterion** - create separate criteria for each value to check
+4. Specific and measurable
+5. Distributed across the provided dimensions
+6. Assigned appropriate categories (e.g., Output, Reasoning, Completeness)
+7. Given weights between 0-3 based on importance (3=most important, 0=informational only)
+8. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
+
+**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The answer correctly reports RAM (~{{{{ram_total}}}}) and disk size ({{{{disk_size}}}})" - This mixes two values!
+- RIGHT: Create TWO separate criteria:
+  1. "The answer correctly reports RAM as ~{{{{ram_total}}}}"
+  2. "The answer correctly reports disk size as {{{{disk_size}}}}"
+- Each factual accuracy criterion should verify ONE atomic value against ground truth
 
 Each criterion should have:
 - name: Unique identifier (lowercase with underscores)
 - category: Category name (will be auto-assigned based on the criterion type)
-- weight: Integer 1-3, or "from_scores" for score-type dimensions
+- weight: Integer 0-3, or "from_scores" for score-type dimensions
 - dimension: Must reference one of the dimension names above
-- criterion: Specific text describing what to check (or "from_scores" for score dimensions)
+- criterion: Specific text describing what to check, using {{{{variable_name}}}} for specific values (or "from_scores" for score dimensions)
 
-Return ONLY a JSON array of criterion objects. Example format:
-[
-  {{
-    "name": "capital_accuracy",
-    "category": "Accuracy",
-    "weight": 3,
-    "dimension": "factual_correctness",
-    "criterion": "The answer must correctly identify Paris as the capital of France"
+**CRITICAL - Weight Constraints:**
+- Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
+- DO NOT use weights outside the 0-3 range (e.g., 10 is INVALID)
+
+**CRITICAL - Dimension Reference:**
+- If referencing a dimension with grading_type "score", ensure that dimension has a "scores" dictionary defined
+
+Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
+{{
+  "variables": {{
+    "capital_city": "Paris",
+    "country_name": "France"
   }},
-  {{
-    "name": "completeness_score",
-    "category": "Completeness",
-    "weight": "from_scores",
-    "dimension": "completeness",
-    "criterion": "from_scores"
-  }}
-]"""
+  "criteria": [
+    {{
+      "name": "capital_accuracy",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_correctness",
+      "criterion": "The answer must correctly identify {{{{capital_city}}}} as the capital of {{{{country_name}}}}"
+    }},
+    {{
+      "name": "completeness_score",
+      "category": "Completeness",
+      "weight": "from_scores",
+      "dimension": "completeness",
+      "criterion": "from_scores"
+    }}
+  ]
+}}
+
+Note: Extract ALL specific data values (names, numbers, identifiers, etc.) to the variables section."""
 
 
 def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> Dict[str, Any]:
@@ -915,7 +949,8 @@ def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> Dict[str, Any]:
 def build_refine_rubric_prompt(
     dimensions: List[Dimension],
     criteria: List[Criterion],
-    feedback: Optional[str] = None
+    feedback: Optional[str] = None,
+    variables: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Build a prompt for refining an existing rubric.
@@ -924,26 +959,30 @@ def build_refine_rubric_prompt(
         dimensions: Current dimensions in the rubric
         criteria: Current criteria in the rubric
         feedback: Optional specific feedback for refinement
+        variables: Optional variables dictionary from the rubric
         
     Returns:
         Formatted prompt string for the LLM
     """
     # Convert to dict for YAML display, preserving tool_calls
-    rubric_dict = {
-        "dimensions": [
-            {
-                "name": d.name,
-                "description": d.description,
-                "grading_type": d.grading_type,
-                **({"scores": d.scores} if d.scores else {})
-            }
-            for d in dimensions
-        ],
-        "criteria": [
-            _convert_criterion_to_dict_for_yaml(c)
-            for c in criteria
-        ]
-    }
+    rubric_dict: Dict[str, Any] = {}
+    
+    if variables:
+        rubric_dict["variables"] = variables
+    
+    rubric_dict["dimensions"] = [
+        {
+            "name": d.name,
+            "description": d.description,
+            "grading_type": d.grading_type,
+            **({"scores": d.scores} if d.scores else {})
+        }
+        for d in dimensions
+    ]
+    rubric_dict["criteria"] = [
+        _convert_criterion_to_dict_for_yaml(c)
+        for c in criteria
+    ]
     
     rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
     
@@ -957,8 +996,9 @@ def build_refine_rubric_prompt(
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable\n"
             "- Improving descriptions for clarity\n"
-            "- Ensuring proper weight distribution\n"
-            "- Adding detail where criteria are too vague"
+            "- Ensuring proper weight distribution (0-3 range)\n"
+            "- Adding detail where criteria are too vague\n"
+            "- Extracting specific values to variables if not already done"
         )
     )
     
@@ -974,6 +1014,44 @@ def build_refine_rubric_prompt(
 Current Rubric:
 {rubric_yaml}{feedback_section}{tool_calls_instruction}
 
+**CRITICAL - Weight Constraints:**
+- Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
+- 0 = informational only, 1 = low importance, 2 = medium importance, 3 = high importance
+- Use "from_scores" only for score-type dimensions where criterion="from_scores"
+- DO NOT use weights outside the 0-3 range (e.g., 10 is INVALID)
+
+**CRITICAL - Dimension Constraints:**
+- If grading_type is "score", the dimension MUST have a "scores" dictionary with integer keys (0-3) and string descriptions
+- If grading_type is "binary", do NOT include a scores dictionary
+
+**CRITICAL - Tool Evaluation Scoring (for tool_use dimensions with score type):**
+If a tool_use dimension uses grading_type "score", use this scoring model.
+The checks depend on tool_calls configuration (respect_order, params, params_strict_mode):
+
+- 3: All applicable checks pass - tool called with correct count, correct order (if respect_order=true), correct parameters (if params specified)
+- 2: Tool called with correct order and parameters, but call count outside min/max bounds
+- 1: Tool called but with incorrect parameters (if params specified) OR wrong order (if respect_order=true)
+- 0: Required tool not called at all
+
+Note: If respect_order=false, order is not checked. If no params specified, params are not checked.
+
+**IMPORTANT - Variables:**
+- Extract specific data values (e.g. names, numbers, identifiers, IP addresses, memory amounts, OS names, percentages, etc.) to a "variables" section
+- Variables should ONLY contain actual, correct values from the source data - NOT examples of incorrect values or placeholders
+- Use {{{{variable_name}}}} placeholders in criterion text AND tool_calls params instead of hard-coded values
+- This makes the rubric reusable with different data
+- If variables already exist, preserve them and add any new ones needed
+
+**CRITICAL - Atomic Factual Accuracy Criteria:**
+- Each factual accuracy criterion MUST check exactly ONE atomic value
+- NEVER combine multiple values in a single criterion
+- BAD: "The summary reports RAM (~{{{{ram_total}}}}) and disk size ({{{{disk_size}}}})" - Mixes two values!
+- GOOD: Split into separate criteria:
+  1. "The summary correctly reports RAM as ~{{{{ram_total}}}}"
+  2. "The summary correctly reports disk size as {{{{disk_size}}}}"
+- This ensures clear pass/fail evaluation for each individual fact
+- If an existing criterion mixes multiple values, SPLIT it into separate atomic criteria
+
 Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
 
 **IMPORTANT - Tool Calls:**
@@ -981,36 +1059,58 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 - Tool call specifications are critical for evaluating tool usage and must be preserved
 - Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
 
+**Granular Tool Criteria with Scoring Modes:**
+When refining tool usage criteria, use SEPARATE criteria with the `mode` field:
+- mode: "required" - Core tools that MUST be called (Pass = weight, Fail = 0)
+- mode: "bonus" - Nice-to-have tools (Pass = extra credit, Fail = 0)
+- mode: "penalty" - Prohibited tools (Pass = 0, Fail = -weight)
+
 Return ONLY a JSON object with this format:
 {{
+  "variables": {{
+    "ip_address": "10.0.187.159",
+    "host": "server01"
+  }},
   "dimensions": [
     {{
       "name": "dimension_name",
       "description": "Clear description",
-      "grading_type": "binary",
-      "scores": {{"1": "desc", "2": "desc"}}
+      "grading_type": "binary"
     }}
   ],
   "criteria": [
     {{
-      "name": "criterion_name",
-      "category": "Category",
+      "name": "core_tools",
+      "category": "Tools",
       "weight": 3,
-      "dimension": "dimension_name",
-      "criterion": "Specific criterion text",
+      "dimension": "tool_use",
+      "criterion": "Must call essential tools.",
       "tool_calls": {{
-        "respect_order": true,
-        "required": [
-          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
-        ],
-        "optional": [],
-        "prohibited": []
+        "respect_order": false,
+        "required": [{{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{{{host}}}}"}}}}]
       }}
+    }},
+    {{
+      "name": "bonus_tools",
+      "category": "Tools",
+      "weight": 1,
+      "dimension": "tool_use",
+      "criterion": "Extra credit for additional diagnostics.",
+      "tool_calls": {{
+        "optional": [{{"name": "get_network_info", "min_calls": 1}}]
+      }}
+    }},
+    {{
+      "name": "ip_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "IP address is '{{{{ip_address}}}}'."
     }}
   ]
 }}
 
-Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
+Note: Scoring is inferred from tool lists (required/optional/prohibited). Omit tool_calls for non-tool criteria."""
 
 
 def build_refine_rubric_with_qa_prompt(
@@ -1019,7 +1119,8 @@ def build_refine_rubric_with_qa_prompt(
     question: str,
     answer: str,
     feedback: Optional[str] = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    variables: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Build a prompt for refining an existing rubric using Q&A context.
@@ -1031,26 +1132,30 @@ def build_refine_rubric_with_qa_prompt(
         answer: The answer from the Q&A pair
         feedback: Optional specific feedback for refinement
         context: Optional additional context
+        variables: Optional variables dictionary from the rubric
         
     Returns:
         Formatted prompt string for the LLM
     """
     # Convert to dict for YAML display, preserving tool_calls
-    rubric_dict = {
-        "dimensions": [
-            {
-                "name": d.name,
-                "description": d.description,
-                "grading_type": d.grading_type,
-                **({"scores": d.scores} if d.scores else {})
-            }
-            for d in dimensions
-        ],
-        "criteria": [
-            _convert_criterion_to_dict_for_yaml(c)
-            for c in criteria
-        ]
-    }
+    rubric_dict: Dict[str, Any] = {}
+    
+    if variables:
+        rubric_dict["variables"] = variables
+    
+    rubric_dict["dimensions"] = [
+        {
+            "name": d.name,
+            "description": d.description,
+            "grading_type": d.grading_type,
+            **({"scores": d.scores} if d.scores else {})
+        }
+        for d in dimensions
+    ]
+    rubric_dict["criteria"] = [
+        _convert_criterion_to_dict_for_yaml(c)
+        for c in criteria
+    ]
     
     rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
@@ -1065,9 +1170,10 @@ def build_refine_rubric_with_qa_prompt(
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable based on the Q&A pair\n"
             "- Improving descriptions for clarity\n"
-            "- Ensuring proper weight distribution\n"
+            "- Ensuring proper weight distribution (0-3 range)\n"
             "- Adding detail where criteria are too vague\n"
-            "- Ensuring criteria accurately reflect what should be evaluated in the answer"
+            "- Ensuring criteria accurately reflect what should be evaluated in the answer\n"
+            "- Extracting specific values to variables if not already done"
         )
     )
     
@@ -1089,44 +1195,95 @@ Answer: {answer}{context_info}
 
 Analyze the Q&A pair and refine the rubric to better evaluate answers like the one provided. Ensure criteria are specific and measurable based on the actual content.
 
-**IMPORTANT - Tool Calls:**
-- If a criterion has a "tool_calls" specification in the current rubric, you MUST include it in the refined rubric
-- Tool call specifications are critical for evaluating tool usage and must be preserved
-- If the answer mentions tool usage and a criterion evaluates tools, ensure it has a proper tool_calls specification
-- Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
+**CRITICAL - Weight Constraints:**
+- Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
+- 0 = informational only, 1 = low importance, 2 = medium importance, 3 = high importance
+- Use "from_scores" only for score-type dimensions where criterion="from_scores"
+- DO NOT use weights outside the 0-3 range (e.g., 10 is INVALID)
+
+**CRITICAL - Dimension Constraints:**
+- If grading_type is "score", the dimension MUST have a "scores" dictionary with integer keys (0-3) and string descriptions
+- If grading_type is "binary", do NOT include a scores dictionary
+
+**CRITICAL - Tool Evaluation Scoring (for tool_use dimensions with score type):**
+If a tool_use dimension uses grading_type "score", use this scoring model.
+The checks depend on tool_calls configuration (respect_order, params, params_strict_mode):
+
+- 3: All applicable checks pass - tool called with correct count, correct order (if respect_order=true), correct parameters (if params specified)
+- 2: Tool called with correct order and parameters, but call count outside min/max bounds
+- 1: Tool called but with incorrect parameters (if params specified) OR wrong order (if respect_order=true)
+- 0: Required tool not called at all
+
+Note: If respect_order=false, order is not checked. If no params specified, params are not checked.
+
+**IMPORTANT - Variables:**
+- Extract specific data values from the Q&A (names, numbers, identifiers, etc.) to a "variables" section
+- Variables should ONLY contain actual, correct values from the source data - NOT examples of incorrect values or placeholders
+- Use {{{{variable_name}}}} placeholders in criterion text AND tool_calls params instead of hard-coded values
+- This makes the rubric reusable with different data
+- If variables already exist, preserve them and add any new ones needed
+
+**CRITICAL - Atomic Factual Accuracy Criteria:**
+- Each factual accuracy criterion MUST check exactly ONE atomic value
+- NEVER combine multiple values in a single criterion
+- BAD: "The answer correctly states the capital ({{{{capital}}}}) and population ({{{{population}}}})" - Mixes two values!
+- GOOD: Split into separate criteria:
+  1. "The answer correctly identifies the capital as {{{{capital}}}}"
+  2. "The answer correctly states the population as {{{{population}}}}"
+- This ensures clear pass/fail evaluation for each individual fact
+- If an existing criterion mixes multiple values, SPLIT it into separate atomic criteria
+
+**Granular Tool Criteria with Scoring Modes:**
+When refining tool usage criteria, use SEPARATE criteria with the `mode` field:
+- mode: "required" - Core tools that MUST be called (Pass = weight, Fail = 0)
+- mode: "bonus" - Nice-to-have tools (Pass = extra credit, Fail = 0)
+- mode: "penalty" - Prohibited tools (Pass = 0, Fail = -weight)
 
 Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
 
 Return ONLY a JSON object with this format:
 {{
+  "variables": {{
+    "capital": "Paris",
+    "population": "67 million"
+  }},
   "dimensions": [
     {{
       "name": "dimension_name",
       "description": "Clear description",
-      "grading_type": "binary",
-      "scores": {{"1": "desc", "2": "desc"}}
+      "grading_type": "binary"
     }}
   ],
   "criteria": [
     {{
-      "name": "criterion_name",
-      "category": "Category",
+      "name": "core_tools",
+      "category": "Tools",
       "weight": 3,
-      "dimension": "dimension_name",
-      "criterion": "Specific criterion text",
+      "dimension": "tool_use",
+      "criterion": "Must call essential tools.",
       "tool_calls": {{
-        "respect_order": true,
-        "required": [
-          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
-        ],
-        "optional": [],
-        "prohibited": []
+        "respect_order": false,
+        "required": [{{"name": "get_info", "min_calls": 1}}]
       }}
+    }},
+    {{
+      "name": "capital_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "The answer correctly identifies the capital as {{{{capital}}}}."
+    }},
+    {{
+      "name": "population_correct",
+      "category": "Accuracy",
+      "weight": 2,
+      "dimension": "factual_accuracy",
+      "criterion": "The answer correctly states the population as {{{{population}}}}."
     }}
   ]
 }}
 
-Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
+Note: Scoring is inferred from tool lists (required/optional/prohibited). Omit tool_calls for non-tool criteria."""
 
 
 def build_refine_rubric_with_chat_prompt(
@@ -1134,7 +1291,8 @@ def build_refine_rubric_with_chat_prompt(
     criteria: List[Criterion],
     chat_content: str,
     feedback: Optional[str] = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    variables: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Build a prompt for refining an existing rubric using chat session context.
@@ -1145,26 +1303,30 @@ def build_refine_rubric_with_chat_prompt(
         chat_content: The chat session content
         feedback: Optional specific feedback for refinement
         context: Optional additional context
+        variables: Optional variables dictionary from the rubric
         
     Returns:
         Formatted prompt string for the LLM
     """
     # Convert to dict for YAML display, preserving tool_calls
-    rubric_dict = {
-        "dimensions": [
-            {
-                "name": d.name,
-                "description": d.description,
-                "grading_type": d.grading_type,
-                **({"scores": d.scores} if d.scores else {})
-            }
-            for d in dimensions
-        ],
-        "criteria": [
-            _convert_criterion_to_dict_for_yaml(c)
-            for c in criteria
-        ]
-    }
+    rubric_dict: Dict[str, Any] = {}
+    
+    if variables:
+        rubric_dict["variables"] = variables
+    
+    rubric_dict["dimensions"] = [
+        {
+            "name": d.name,
+            "description": d.description,
+            "grading_type": d.grading_type,
+            **({"scores": d.scores} if d.scores else {})
+        }
+        for d in dimensions
+    ]
+    rubric_dict["criteria"] = [
+        _convert_criterion_to_dict_for_yaml(c)
+        for c in criteria
+    ]
     
     rubric_yaml = yaml.dump(rubric_dict, sort_keys=False)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
@@ -1179,9 +1341,10 @@ def build_refine_rubric_with_chat_prompt(
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable based on the chat session\n"
             "- Improving descriptions for clarity\n"
-            "- Ensuring proper weight distribution\n"
+            "- Ensuring proper weight distribution (0-3 range)\n"
             "- Adding detail where criteria are too vague\n"
-            "- Ensuring criteria accurately reflect tool usage, output quality, and other aspects shown in the chat"
+            "- Ensuring criteria accurately reflect tool usage, output quality, and other aspects shown in the chat\n"
+            "- Extracting specific values to variables if not already done"
         )
     )
     
@@ -1202,49 +1365,138 @@ def build_refine_rubric_with_chat_prompt(
 
 Analyze the chat session and refine the rubric to better evaluate similar interactions. Consider tool usage, output accuracy, completeness, and other relevant aspects shown in the chat.
 
-**IMPORTANT - Tool Calls:**
-- If a criterion has a "tool_calls" specification in the current rubric, you MUST include it in the refined rubric
-- Tool call specifications are critical for evaluating tool usage and must be preserved
-- If the chat session shows tool calls and a criterion evaluates tool usage, ensure it has a proper tool_calls specification
-- The tool_calls specification should include:
-  * respect_order: true/false (whether tool call order matters)
-  * required: List of required tools (extract from chat session) with min_calls and max_calls
-  * optional: List of optional tools that can be called
-  * prohibited: List of tools that should not be called
-- Only add tool_calls to criteria that evaluate tool usage (typically criteria in the "Tools" category)
+**CRITICAL - Weight Constraints:**
+- Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
+- 0 = informational only, 1 = low importance, 2 = medium importance, 3 = high importance
+- Use "from_scores" only for score-type dimensions where criterion="from_scores"
+- DO NOT use weights outside the 0-3 range (e.g., 10 is INVALID)
+
+**CRITICAL - Dimension Constraints:**
+- If grading_type is "score", the dimension MUST have a "scores" dictionary with integer keys (0-3) and string descriptions
+- If grading_type is "binary", do NOT include a scores dictionary
+
+**CRITICAL - Tool Evaluation Scoring (for tool_use dimensions with score type):**
+If a tool_use dimension uses grading_type "score", use this scoring model.
+The checks depend on tool_calls configuration (respect_order, params, params_strict_mode):
+
+- 3: All applicable checks pass - tool called with correct count, correct order (if respect_order=true), correct parameters (if params specified)
+- 2: Tool called with correct order and parameters, but call count outside min/max bounds
+- 1: Tool called but with incorrect parameters (if params specified) OR wrong order (if respect_order=true)
+- 0: Required tool not called at all
+
+Note: If respect_order=false, order is not checked. If no params specified, params are not checked.
+
+**IMPORTANT - Variables:**
+- Extract specific data values from the chat session (e.g. names, numbers, identifiers, IP addresses, memory amounts, OS names, percentages, etc.) to a "variables" section
+- Variables should ONLY contain actual, correct values from the source data - NOT examples of incorrect values or placeholders
+- Use {{{{variable_name}}}} placeholders in criterion text AND tool_calls params instead of hard-coded values
+- This makes the rubric reusable with different data
+- If variables already exist, preserve them and add any new ones needed
+
+**CRITICAL - Atomic Factual Accuracy Criteria:**
+- Each factual accuracy criterion MUST check exactly ONE atomic value
+- NEVER combine multiple values in a single criterion
+- BAD: "The response correctly reports RAM (~{{{{ram_total}}}}) and disk size ({{{{disk_size}}}})" - Mixes two values!
+- GOOD: Split into separate criteria:
+  1. "The response correctly reports RAM as ~{{{{ram_total}}}}"
+  2. "The response correctly reports disk size as {{{{disk_size}}}}"
+- This ensures clear pass/fail evaluation for each individual fact
+- If an existing criterion mixes multiple values, SPLIT it into separate atomic criteria
+
+**IMPORTANT - Granular Tool Criteria with Scoring Modes:**
+When refining tool usage criteria, use SEPARATE criteria for different tool categories with the `mode` field:
+
+1. **Required tools (mode: "required")** - Core/essential tools that MUST be called
+   - Pass = full weight, Fail = 0
+   - Use for tools critical to completing the task
+   
+2. **Bonus tools (mode: "bonus")** - Nice-to-have tools that add value but aren't essential
+   - Pass = extra credit, Fail = 0 (no penalty for not calling)
+   - Use for optional enhancements
+   
+3. **Penalty tools (mode: "penalty")** - Prohibited/dangerous tools that should NOT be called
+   - Pass (no violation) = 0, Fail (violation) = negative score
+   - Use for dangerous operations
+
+**Strategy for tool criteria:**
+- Split monolithic tool criteria into separate required/bonus/penalty criteria
+- Each criterion has its own weight reflecting importance
+- This allows granular scoring instead of all-or-nothing
 
 Return the refined rubric as JSON with the same structure. Maintain all dimension names that criteria reference.
 
 Return ONLY a JSON object with this format:
 {{
+  "variables": {{
+    "ip_address": "10.0.187.159",
+    "ram_total": "1.7GB",
+    "host": "server01"
+  }},
   "dimensions": [
     {{
       "name": "dimension_name",
       "description": "Clear description",
-      "grading_type": "binary",
-      "scores": {{"1": "desc", "2": "desc"}}
+      "grading_type": "binary"
     }}
   ],
   "criteria": [
     {{
-      "name": "criterion_name",
-      "category": "Category",
+      "name": "core_tools_called",
+      "category": "Tools",
       "weight": 3,
-      "dimension": "dimension_name",
-      "criterion": "Specific criterion text",
+      "dimension": "tool_use",
+      "criterion": "Must call essential diagnostic tools.",
       "tool_calls": {{
-        "respect_order": true,
+        "respect_order": false,
         "required": [
-          {{"name": "tool_name", "min_calls": 1, "max_calls": 1}}
-        ],
-        "optional": [],
-        "prohibited": []
+          {{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{{{host}}}}"}}}}
+        ]
       }}
+    }},
+    {{
+      "name": "optional_diagnostics",
+      "category": "Tools",
+      "weight": 1,
+      "dimension": "tool_use",
+      "criterion": "Extra credit for additional diagnostics.",
+      "tool_calls": {{
+        "optional": [
+          {{"name": "get_network_interfaces", "min_calls": 1}}
+        ]
+      }}
+    }},
+    {{
+      "name": "no_dangerous_ops",
+      "category": "Tools",
+      "weight": 2,
+      "dimension": "tool_use",
+      "criterion": "Must not call destructive operations.",
+      "tool_calls": {{
+        "prohibited": [
+          {{"name": "reboot_system"}}
+        ]
+      }}
+    }},
+    {{
+      "name": "ip_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "The response correctly states the IP address is '{{{{ip_address}}}}'."
+    }},
+    {{
+      "name": "ram_correct",
+      "category": "Accuracy",
+      "weight": 2,
+      "dimension": "factual_accuracy",
+      "criterion": "The response correctly reports RAM as ~{{{{ram_total}}}}."
     }}
   ]
 }}
 
-Note: Include "tool_calls" ONLY for criteria that evaluate tool usage. Omit it for other criteria."""
+Note: 
+- Scoring is inferred from tool lists (required/optional/prohibited). Omit tool_calls for non-tool criteria.
+- Each factual accuracy criterion checks ONE value only (ip_correct and ram_correct are separate)."""
 
 
 def build_chat_dimension_generation_prompt(
@@ -1287,8 +1539,13 @@ Each dimension should:
 1. Have a unique, descriptive name (lowercase with underscores, e.g., "tool_usage_correctness", "factual_accuracy")
 2. Have a **GENERIC** description of what aspect it evaluates (e.g., "checks if stated facts are correct")
 3. **DO NOT** mention specific tools, data values, or fields in the dimension description
-4. Specify a grading_type: either "binary" (pass/fail) or "score" (numeric scale from 1 to 3)
-5. For "score" type, include a scores dictionary with integer keys and description values
+4. Specify a grading_type: either "binary" (pass/fail) or "score" (numeric scale from 0 to 3)
+5. For "score" type, you MUST include a "scores" dictionary with integer keys (0-3) and description values
+
+**CRITICAL - Score Dimensions:**
+- If grading_type is "score", the "scores" field is REQUIRED - do NOT set it to null or omit it
+- Scores must have keys 0, 1, 2, 3 with string descriptions for each level
+- If you don't need nuanced scoring, use grading_type "binary" instead
 
 **CRITICAL - Dimension Design:**
 - Dimensions should be GENERIC and reusable (e.g., "factual_accuracy" not "data_field_accuracy")
@@ -1301,6 +1558,17 @@ IMPORTANT:
 - **Prefer "binary" grading type for fact-checking dimensions**
 - Typical dimensions needed: tool_use, factual_accuracy, completeness, clarity
 - Use "score" type only for dimensions that genuinely need nuanced evaluation (e.g., overall clarity, completeness)
+
+**CRITICAL - Tool Evaluation Scoring (if using score type for tool_use):**
+If you use grading_type "score" for tool evaluation, use this scoring model.
+The checks depend on tool_calls configuration (respect_order, params, params_strict_mode):
+
+- 3: All applicable checks pass - tool called with correct count, correct order (if respect_order=true), correct parameters (if params specified)
+- 2: Tool called with correct order and parameters, but call count outside min/max bounds
+- 1: Tool called but with incorrect parameters (if params specified) OR wrong order (if respect_order=true)
+- 0: Required tool not called at all
+
+Note: If respect_order=false, order is not checked. If no params specified, params are not checked.
 
 Return ONLY a JSON array of dimension objects. Example format:
 [
@@ -1319,6 +1587,7 @@ Return ONLY a JSON array of dimension objects. Example format:
     "description": "Evaluates whether all requested information was provided",
     "grading_type": "score",
     "scores": {{
+      "0": "No relevant information provided",
       "1": "Missing most requested information",
       "2": "Some information provided but incomplete",
       "3": "All requested information comprehensively provided"
@@ -1329,6 +1598,7 @@ Return ONLY a JSON array of dimension objects. Example format:
     "description": "Evaluates the readability and organization of the response",
     "grading_type": "score",
     "scores": {{
+      "0": "Completely unintelligible or no response",
       "1": "Poorly organized or difficult to understand",
       "2": "Generally clear but could be improved",
       "3": "Exceptionally clear and well-organized"
@@ -1374,7 +1644,7 @@ def build_chat_criteria_generation_prompt(
     count_instruction = (
         f"generate {num_criteria} specific evaluation criteria"
         if num_criteria is not None
-        else "generate an appropriate number of specific evaluation criteria (between 7 and 10, create enough to check all important aspects including each tool call and each key fact in the response)"
+        else "generate an appropriate number of specific evaluation criteria (between 7 and 12, create enough to check all important aspects including tool calls and key facts)"
     )
     
     return f"""Given the following chat session and dimensions, {count_instruction}.
@@ -1388,87 +1658,115 @@ def build_chat_criteria_generation_prompt(
 **Instructions:**
 Analyze the chat session above. If you detect tool calls in the session, create criteria that evaluate them.
 
-Criteria should be:
-1. **Atomic and specific** - each criterion should check ONE specific thing (e.g., "value X is correct", not "all values are correct")
-2. **Fact-based where possible** - for factual information, create separate criteria for each distinct fact or data point
-3. Measurable and unambiguous
-4. Distributed across the provided dimensions
-5. Assigned appropriate categories (Tools, Accuracy, Completeness, Output, Clarity, etc.)
-6. Given weights between 1-3 based on importance (3=most important, 1=nice-to-have)
-7. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
-8. **IMPORTANT - Tool Usage Criteria**:
-   - For tool evaluation, typically create ONE comprehensive criterion (e.g., "tools_used_correctly")
-   - This single criterion uses the "tool_calls" specification to check ALL aspects: selection, order, count, and params
-   - The tool_calls specification should include:
-     * respect_order: true/false (whether tool call order matters)
-     * required: List of required tools (detect from session) with min_calls and max_calls
-     * optional: List of optional tools that can be called
-     * prohibited: List of tools that should not be called
-   - Only create separate tool criteria if you need different importance weights for different aspects
+**IMPORTANT - Variables Section:**
+Extract specific data values from the chat session (IP addresses, RAM amounts, percentages, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{{{variable_name}}}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values.
 
-**Strategy for creating atomic criteria:**
-- If the response mentions a specific value, create a criterion checking that exact value
-- Each distinct fact should have its own criterion (e.g., quantity, identifier, measurement as separate criteria)
-- Multiple atomic criteria can all reference the SAME generic dimension (e.g., all fact checks use "factual_accuracy")
-- Prefer many specific criteria over few general ones
-- Each criterion tests ONE specific thing but references a generic dimension
+**CRITICAL - Granular Tool Criteria:**
+When evaluating tool usage, create SEPARATE criteria for different tool categories. Scoring is inferred from which lists are populated:
+
+1. **Required tools** (use `required` list) - Core/essential tools that MUST be called
+   - Pass = full weight, Fail = 0
+   
+2. **Bonus tools** (use `optional` list only) - Nice-to-have tools
+   - Pass = extra credit, Fail = 0 (no penalty for not calling)
+   
+3. **Penalty tools** (use `prohibited` list only) - Tools that should NOT be called
+   - No violation = 0, Violation = negative score
+
+**Strategy for tool criteria:**
+- Create ONE criterion per tool category, not one giant criterion
+- Each criterion has its own weight reflecting importance
+- Granular scoring: required pass/fail, optional give bonus, prohibited deduct points
+
+Criteria should be:
+1. **ATOMIC** - each criterion checks exactly ONE specific thing (one fact, one value, one tool requirement)
+2. **Fact-based where possible** - create separate criteria for each distinct fact or data point
+3. **Use variables** - reference values using {{{{variable_name}}}} syntax
+4. **Never mix multiple values in one factual accuracy criterion** - this is critical for reliable evaluation
+5. Measurable and unambiguous
+6. Distributed across the provided dimensions
+7. Given weights between 0-3 based on importance (3=most important, 0=informational only)
+8. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
+
+**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The response correctly states the RAM (~{{{{ram_total}}}}) and IP address ({{{{ip_address}}}})" - Mixes two values!
+- RIGHT: Create SEPARATE criteria:
+  1. "The response correctly states RAM as ~{{{{ram_total}}}}"
+  2. "The response correctly states IP address as {{{{ip_address}}}}"
+- ONE value per factual accuracy criterion - no exceptions
 
 Each criterion should have:
 - name: Unique identifier (lowercase with underscores)
 - category: Category name (Tools, Output, Reasoning, etc.)
-- weight: Integer 1-3, or "from_scores" for score-type dimensions
+- weight: Integer 0-3, or "from_scores" for score-type dimensions
 - dimension: Must reference one of the dimension names above
-- criterion: Specific text describing what to check (or "from_scores" for score dimensions)
-- tool_calls: (ONLY for tool usage criteria) Tool call specification object
+- criterion: Specific text describing what to check
+- tool_calls: (ONLY for tool usage criteria) Tool call specification
 
-Return ONLY a JSON array of criterion objects. Example format:
-[
-  {{
-    "name": "tools_used_correctly",
-    "category": "Tools",
-    "weight": 3,
-    "dimension": "tool_use",
-    "criterion": "Assistant must call the appropriate tools in the correct order with valid parameters",
-    "tool_calls": {{
-      "respect_order": true,
-      "required": [
-        {{"name": "first_tool_from_session", "min_calls": 1, "max_calls": 1}},
-        {{"name": "second_tool_from_session", "min_calls": 1, "max_calls": 1}}
-      ],
-      "optional": [],
-      "prohibited": []
+**CRITICAL - Weight Constraints:**
+- Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
+- DO NOT use weights outside the 0-3 range (e.g., 10 is INVALID)
+
+**CRITICAL - Dimension Reference:**
+- If referencing a dimension with grading_type "score", ensure that dimension has a "scores" dictionary defined
+
+Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
+{{
+  "variables": {{
+    "ip_address": "10.0.187.159",
+    "ram_total": "1.7GB",
+    "host": "server01"
+  }},
+  "criteria": [
+    {{
+      "name": "core_tools_called",
+      "category": "Tools",
+      "weight": 3,
+      "dimension": "tool_use",
+      "criterion": "Must call essential diagnostic tools.",
+      "tool_calls": {{
+        "respect_order": false,
+        "required": [
+          {{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{{{host}}}}"}}}},
+          {{"name": "get_memory_info", "min_calls": 1}}
+        ]
+      }}
+    }},
+    {{
+      "name": "optional_diagnostics",
+      "category": "Tools",
+      "weight": 1,
+      "dimension": "tool_use",
+      "criterion": "Extra credit for additional diagnostics.",
+      "tool_calls": {{
+        "optional": [
+          {{"name": "get_network_interfaces", "min_calls": 1}}
+        ]
+      }}
+    }},
+    {{
+      "name": "no_dangerous_ops",
+      "category": "Tools",
+      "weight": 2,
+      "dimension": "tool_use",
+      "criterion": "Must not call destructive operations.",
+      "tool_calls": {{
+        "prohibited": [
+          {{"name": "reboot_system"}}
+        ]
+      }}
+    }},
+    {{
+      "name": "ip_address_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "The response correctly states the IP address is '{{{{ip_address}}}}'."
     }}
-  }},
-  {{
-    "name": "key_value_correct",
-    "category": "Accuracy",
-    "weight": 3,
-    "dimension": "factual_accuracy",
-    "criterion": "The response correctly states the primary value or identifier"
-  }},
-  {{
-    "name": "measurement_correct",
-    "category": "Accuracy",
-    "weight": 3,
-    "dimension": "factual_accuracy",
-    "criterion": "The response correctly reports the measured quantity"
-  }},
-  {{
-    "name": "secondary_detail_correct",
-    "category": "Accuracy",
-    "weight": 2,
-    "dimension": "factual_accuracy",
-    "criterion": "The response correctly identifies the secondary attribute or detail"
-  }},
-  {{
-    "name": "completeness_score",
-    "category": "Completeness",
-    "weight": "from_scores",
-    "dimension": "completeness",
-    "criterion": "from_scores"
-  }}
-]
+  ]
+}}
 
 Note: 
-- Extract actual tool names from the chat session above when creating tool_calls specifications
-- Multiple criteria can reference the same dimension (e.g., all factual checks use "factual_accuracy")"""
+- Extract actual tool names from the chat session
+- Scoring inferred from lists: required=pass/fail, optional=bonus, prohibited=penalty
+- Extract ALL specific data values to the variables section"""

@@ -462,6 +462,169 @@ class TestGenerateCommand:
                     os.unlink(output_path)
 
 
+@pytest.fixture
+def sample_dimensions_file():
+    """Create a sample dimensions YAML file."""
+    dims_yaml = """
+dimensions:
+  - name: tool_usage
+    description: "Evaluates correct tool usage"
+    grading_type: binary
+
+  - name: factual_accuracy
+    description: "Evaluates factual correctness"
+    grading_type: binary
+"""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        f.write(dims_yaml)
+        temp_path = f.name
+    
+    yield temp_path
+    os.unlink(temp_path)
+
+
+class TestGenerateWithDimensionsFile:
+    """Test generate command with --dimensions-file."""
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_with_dimensions_file(self, mock_generator_class, sample_qa_file, sample_dimensions_file):
+        """Test generate command uses provided dimensions file."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="tool_usage", description="Evaluates tool usage", grading_type="binary"),
+                Dimension(name="factual_accuracy", description="Evaluates facts", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="fact_1", category="Output", weight=3, dimension="factual_accuracy", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-qna', sample_qa_file,
+                '--output-file', output_path,
+                '--dimensions-file', sample_dimensions_file
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify generate_rubric was called with dimensions parameter
+            call_args = mock_generator.generate_rubric.call_args
+            assert 'dimensions' in call_args[1]
+            dims = call_args[1]['dimensions']
+            assert len(dims) == 2
+            assert dims[0].name == "tool_usage"
+            assert dims[1].name == "factual_accuracy"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_from_chat_with_dimensions_file(self, mock_generator_class, sample_chat_session_file, sample_dimensions_file):
+        """Test generate from chat uses provided dimensions file."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="tool_usage", description="Evaluates tool usage", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="tool_1", category="Tools", weight=3, dimension="tool_usage", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric_from_chat.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-chat-session', sample_chat_session_file,
+                '--output-file', output_path,
+                '--dimensions-file', sample_dimensions_file
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify generate_rubric_from_chat was called with dimensions parameter
+            call_args = mock_generator.generate_rubric_from_chat.call_args
+            assert 'dimensions' in call_args[1]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+
+class TestRefineWithDimensionsFile:
+    """Test refine command with --dimensions-file."""
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_with_dimensions_file(self, mock_generator_class, sample_rubric_file, sample_dimensions_file):
+        """Test refine command merges provided dimensions."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="factual_correctness", description="Test", grading_type="binary"),
+                Dimension(name="tool_usage", description="Tools", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="fact_1", category="Output", weight=3, dimension="factual_correctness", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'refine',
+                '--rubric-file', sample_rubric_file,
+                '--output-file', output_path,
+                '--dimensions-file', sample_dimensions_file
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify refine_rubric was called with dimensions_to_merge parameter
+            call_args = mock_generator.refine_rubric.call_args
+            assert 'dimensions_to_merge' in call_args[1]
+            dims = call_args[1]['dimensions_to_merge']
+            assert len(dims) == 2
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+
 class TestRefineCommand:
     """Test the 'refine' subcommand."""
     
@@ -800,6 +963,233 @@ def test_cli_no_subcommand():
     # Should either show help or return error
     result = main()
     assert result != 0 or result is None
+
+
+class TestArenaCommand:
+    """Test the 'arena' subcommand."""
+    
+    @pytest.fixture
+    def sample_arena_spec_file(self, sample_rubric_file):
+        """Create a sample arena spec YAML file."""
+        # Create a judge panel file
+        judge_panel_yaml = """
+judge_panel:
+  judges:
+    - name: test_judge
+      model: gpt-4
+      api_key: null
+  execution:
+    mode: sequential
+  consensus:
+    mode: unanimous
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            f.write(judge_panel_yaml)
+            judge_panel_path = f.name
+        
+        # Create chat session files
+        session1_content = "User: Hello\nAssistant: Hi there!"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(session1_content)
+            session1_path = f.name
+        
+        session2_content = "User: Test\nAssistant: Response"
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(session2_content)
+            session2_path = f.name
+        
+        # Create arena spec
+        arena_spec = {
+            "arena": {
+                "name": "Test Arena",
+                "description": "Test comparison",
+                "rubric_file": sample_rubric_file,
+                "judges_panel_file": judge_panel_path,
+                "contestants": [
+                    {
+                        "id": "model_a",
+                        "name": "Model A",
+                        "input_file": session1_path
+                    },
+                    {
+                        "id": "model_b",
+                        "name": "Model B",
+                        "input_file": session2_path,
+                        "variables": {"test_var": "value"}
+                    }
+                ]
+            }
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(arena_spec, f)
+            arena_spec_path = f.name
+        
+        yield arena_spec_path
+        
+        # Cleanup
+        os.unlink(arena_spec_path)
+        os.unlink(judge_panel_path)
+        os.unlink(session1_path)
+        os.unlink(session2_path)
+    
+    def test_arena_cli_requires_arena_spec(self):
+        """Test that arena subcommand requires --arena-spec argument."""
+        from rubric_kit.main import main
+        import sys
+        
+        sys.argv = ['rubric-kit', 'arena']
+        
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        
+        # Should exit with error due to missing required argument
+        assert exc_info.value.code != 0
+    
+    def test_arena_cli_parses_arena_spec(self, sample_arena_spec_file):
+        """Test that arena subcommand correctly parses --arena-spec argument."""
+        from rubric_kit.main import main
+        import sys
+        import argparse
+        
+        # Just test that the parser works, not the full command
+        from rubric_kit.main import main as main_func
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            # Patch sys.argv and verify parsing
+            sys.argv = ['rubric-kit', 'arena', '--arena-spec', sample_arena_spec_file, '--output-file', output_path]
+            
+            # This should parse correctly and complete (failures are handled gracefully)
+            with patch.dict(os.environ, {}, clear=True):
+                result = main()
+                # Arena continues even when contestants fail (graceful degradation)
+                # Returns 0 because it saves partial results
+                assert result == 0
+                
+                # Verify output file was created with partial results
+                with open(output_path, 'r') as f:
+                    data = yaml.safe_load(f)
+                assert data["mode"] == "arena"
+                assert data["metadata"].get("partial") == True  # Marked as partial due to failures
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_arena_command_runs_multiple_evaluations(self, mock_eval_llm, sample_arena_spec_file):
+        """Test that arena command evaluates all contestants."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'arena', '--arena-spec', sample_arena_spec_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Should have called evaluation for each contestant
+            assert mock_eval_llm.call_count == 2
+            
+            # Verify output file exists
+            assert os.path.exists(output_path)
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_arena_output_structure(self, mock_eval_llm, sample_arena_spec_file):
+        """Test that arena output has correct structure with all contestants."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'arena', '--arena-spec', sample_arena_spec_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Check arena-specific structure
+            assert data["mode"] == "arena"
+            assert "contestants" in data
+            assert "model_a" in data["contestants"]
+            assert "model_b" in data["contestants"]
+            
+            # Each contestant should have results and summary
+            for contestant_id in ["model_a", "model_b"]:
+                contestant = data["contestants"][contestant_id]
+                assert "results" in contestant
+                assert "summary" in contestant
+                assert "name" in contestant
+            
+            # Should have shared rubric and judge_panel
+            assert "rubric" in data
+            assert "judge_panel" in data
+            
+            # Should have rankings
+            assert "rankings" in data
+            assert len(data["rankings"]) == 2
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch('rubric_kit.main.export_arena_pdf')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_arena_with_report(self, mock_pdf, mock_eval_llm, sample_arena_spec_file):
+        """Test arena subcommand with --report flag generates PDF."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.pdf', delete=False) as f:
+            pdf_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'arena', '--arena-spec', sample_arena_spec_file, 
+                       '--output-file', output_path, '--report', pdf_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert mock_pdf.called
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            if os.path.exists(pdf_path):
+                os.unlink(pdf_path)
 
 
 

@@ -1,3 +1,23 @@
+# Example rubric with variables and granular tool criteria
+#
+# Variables allow you to define specific data values in one place and reference
+# them throughout your criteria using {{variable_name}} syntax. This makes rubrics
+# reusable - you can run the same rubric with different data by just changing
+# the variables section.
+#
+# Tool Calls Scoring:
+# Scoring is automatically inferred from which tool lists are populated:
+# - required: Tools that MUST be called (Pass = weight, Fail = 0)
+# - optional: Bonus tools (Pass = extra credit, Fail = 0 - no penalty for not calling)
+# - prohibited: Tools that MUST NOT be called (Violation = -weight penalty)
+
+variables:
+  os_distro: "Fedora Linux 42"
+  cpu_count: "8"
+  ram_total: "64 GB"
+  hostname: "10.9.9.1"
+  username: "root"
+
 dimensions:
   - factual_correctness:
       description: Assesses whether the information in the final response is accurate and consistent with validated sources or tool outputs.
@@ -10,29 +30,33 @@ dimensions:
       grading_type: score
       pass_above: 2
       scores:
+        0: No response provided or completely off-topic.
         1: The response is irrelevant or fails to address the original request in any meaningful way.
         2: The response provides some value but leaves important steps or information missing, resulting in a partial or incomplete answer.
-        3: The response fully satisfies the user’s request, delivering all essential and expected information in a helpful manner.
+        3: The response fully satisfies the user's request, delivering all essential and expected information in a helpful manner.
   - tool_usage:
-      description: Evaluates the selection and correct use of required tool(s) to address the original request.
+      description: Evaluates the selection and correct use of tools to address the original request.
       grading_type: binary # pass/fail
 
 criteria:
+  # Accuracy criteria - checking factual correctness of specific values
   sys_info_distro:
     category: Accuracy
     weight: 3
     dimension: factual_correctness
-    criterion: The response accurately identifies the operating system as Fedora Linux 42.
+    criterion: The response accurately identifies the operating system as {{os_distro}}.
   sys_info_cpu:
     category: Accuracy
     weight: 3
     dimension: factual_correctness
-    criterion: The response accurately reports there are 8 physical CPUs.
+    criterion: The response accurately reports there are {{cpu_count}} physical CPUs.
   sys_info_memory:
     category: Accuracy
     weight: 3
     dimension: factual_correctness
-    criterion: The response accurately states the total physical RAM is 64 GB.
+    criterion: The response accurately states the total physical RAM is {{ram_total}}.
+
+  # Output content criteria
   extra_info_network:
     category: Output Content
     weight: 1
@@ -43,37 +67,64 @@ criteria:
     weight: 1
     dimension: output_content
     criterion: The response provides information about system disk space usage.
+
+  # Score-based criterion
   useful_answer:
     category: Usefulness
     weight: from_scores
     dimension: usefulness
     criterion: from_scores
-  tool_call_sys_info:
+
+  # REQUIRED TOOLS: Core tools that MUST be called
+  # Has 'required' list -> Pass = 3 points, Fail = 0 points
+  core_system_tools:
     category: Tool Usage
     weight: 3
     dimension: tool_usage
+    criterion: The assistant must call core system information tools.
     tool_calls:
       respect_order: false
-      params_strict_mode: false  # If true, exactly the specified params must match (no extra params allowed)
+      params_strict_mode: false
       required:
         - get_system_information:
             min_calls: 1
             max_calls: 1
-            params:  # Specify params to validate (omit entirely for no validation)
-              hostname: 10.9.9.1
-              username: root
+            params:
+              hostname: "{{hostname}}"
+              username: "{{username}}"
         - get_cpu_information:
             min_calls: 1
             max_calls: 1
-            # params not specified = no validation (params can be anything or omitted)
         - get_memory_information:
             min_calls: 1
             max_calls: 1
-            params: {}  # Empty dict = explicitly check that tool was called with NO parameters
+
+  # BONUS TOOLS: Nice-to-have tools that add extra credit
+  # Has only 'optional' list -> Pass = 1 point extra credit, Fail = 0 (no penalty)
+  optional_diagnostics:
+    category: Tool Usage
+    weight: 1
+    dimension: tool_usage
+    criterion: Extra credit for gathering additional network and disk diagnostics.
+    tool_calls:
+      respect_order: false
       optional:
         - get_network_interfaces:
+            min_calls: 1
             max_calls: 1
         - get_disk_usage:
+            min_calls: 1
             max_calls: 1
+
+  # PENALTY TOOLS: Prohibited tools that should NOT be called
+  # Has only 'prohibited' list -> No violation = 0, Violation = -2 points
+  no_irrelevant_tools:
+    category: Tool Usage
+    weight: 2
+    dimension: tool_usage
+    criterion: Must not call irrelevant or dangerous tools.
+    tool_calls:
       prohibited:
-        - get_weather:
+        - get_weather
+        - delete_files
+        - reboot_system
