@@ -15,6 +15,8 @@ LLM-as-a-Judge evaluation framework. Create, refine, and apply evaluation rubric
 
 ## Installation
 
+Requires Python 3.10 or higher.
+
 ```bash
 pip install rubric-kit
 ```

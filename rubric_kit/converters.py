@@ -149,3 +149,4 @@ def panel_config_to_portable_dict(panel_config: JudgePanelConfig) -> Dict[str, A
         }
     }
 
+
