@@ -63,6 +63,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for changelog
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
@@ -70,17 +72,43 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Extract version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      - name: Get previous tag
+        id: prev_tag
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_OUTPUT
+          echo "Previous tag: $PREV_TAG"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "## What's Changed in $VERSION" > CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          
+          if [ -n "${{ steps.prev_tag.outputs.PREV_TAG }}" ]; then
+            echo "### Commits" >> CHANGELOG.md
+            git log ${{ steps.prev_tag.outputs.PREV_TAG }}..HEAD --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          else
+            echo "### Commits" >> CHANGELOG.md
+            git log --pretty=format:"- %s (%h)" >> CHANGELOG.md
+          fi
+          
+          echo "" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "---" >> CHANGELOG.md
+          echo "" >> CHANGELOG.md
+          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${{ steps.prev_tag.outputs.PREV_TAG }}...$VERSION" >> CHANGELOG.md
+          
+          cat CHANGELOG.md
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
+          body_path: CHANGELOG.md
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
-          generate_release_notes: true
           files: |
             dist/*
 
@@ -102,4 +130,3 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
-
