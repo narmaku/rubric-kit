@@ -4,6 +4,7 @@ import pytest
 import tempfile
 import os
 from unittest.mock import Mock, patch, MagicMock
+import litellm
 from rubric_kit.schema import (
     Rubric, Dimension, Criterion,
     JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
@@ -101,15 +102,13 @@ def test_evaluate_criterion_with_single_judge(simple_rubric, sample_chat_session
     dimension = simple_rubric.get_dimension(criterion.dimension)
     chat_content = open(sample_chat_session_file).read()
     
-    # Mock the OpenAI client
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
+    # Mock litellm.completion
+    with patch('litellm.completion') as mock_completion:
         # Setup mock response
-        mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: The response correctly states 8 CPUs."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         result = evaluate_criterion_with_panel(
             criterion=criterion,
@@ -131,14 +130,12 @@ def test_evaluate_criterion_with_multi_judge_consensus(simple_rubric, sample_cha
     dimension = simple_rubric.get_dimension(criterion.dimension)
     chat_content = open(sample_chat_session_file).read()
     
-    # Mock the OpenAI client to return consistent PASS votes
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion to return consistent PASS votes
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         result = evaluate_criterion_with_panel(
             criterion=criterion,
@@ -162,10 +159,10 @@ def test_evaluate_criterion_with_multi_judge_no_consensus(simple_rubric, sample_
     dimension = simple_rubric.get_dimension(criterion.dimension)
     chat_content = open(sample_chat_session_file).read()
     
-    # Mock the OpenAI client to return split votes
+    # Mock litellm.completion to return split votes
     call_count = [0]
     
-    def mock_create(*args, **kwargs):
+    def mock_completion_call(*args, **kwargs):
         response = MagicMock()
         response.choices = [MagicMock()]
         # First call: PASS, second: FAIL, third: PASS
@@ -176,11 +173,7 @@ def test_evaluate_criterion_with_multi_judge_no_consensus(simple_rubric, sample_
         call_count[0] += 1
         return response
     
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = mock_create
-        mock_openai.return_value = mock_client
-        
+    with patch('litellm.completion', side_effect=mock_completion_call):
         result = evaluate_criterion_with_panel(
             criterion=criterion,
             chat_content=chat_content,
@@ -203,14 +196,12 @@ def test_evaluate_criterion_score_based(simple_rubric, sample_chat_session_file,
     dimension = simple_rubric.get_dimension(criterion.dimension)
     chat_content = open(sample_chat_session_file).read()
     
-    # Mock the OpenAI client to return consistent score
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion to return consistent score
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "SCORE: 2\nREASON: Somewhat useful response."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         result = evaluate_criterion_with_panel(
             criterion=criterion,
@@ -233,10 +224,10 @@ def test_evaluate_rubric_with_panel(simple_rubric, sample_chat_session_file, sin
     """Test evaluating full rubric with judge panel."""
     from rubric_kit.llm_judge import evaluate_rubric_with_panel
     
-    # Mock the OpenAI client
+    # Mock litellm.completion
     call_count = [0]
     
-    def mock_create(*args, **kwargs):
+    def mock_completion_call(*args, **kwargs):
         response = MagicMock()
         response.choices = [MagicMock()]
         if call_count[0] == 0:
@@ -248,11 +239,7 @@ def test_evaluate_rubric_with_panel(simple_rubric, sample_chat_session_file, sin
         call_count[0] += 1
         return response
     
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = mock_create
-        mock_openai.return_value = mock_client
-        
+    with patch('litellm.completion', side_effect=mock_completion_call):
         evaluations = evaluate_rubric_with_panel(
             rubric=simple_rubric,
             chat_session_file=sample_chat_session_file,
@@ -287,11 +274,7 @@ def test_evaluate_criterion_with_api_error(simple_rubric, sample_chat_session_fi
     chat_content = open(sample_chat_session_file).read()
     
     # Mock API error
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = Exception("API Error")
-        mock_openai.return_value = mock_client
-        
+    with patch('litellm.completion', side_effect=Exception("API Error")):
         with pytest.raises(Exception, match="Judge evaluation failed"):
             evaluate_criterion_with_panel(
                 criterion=criterion,
@@ -581,14 +564,12 @@ def test_judge_with_custom_temperature(simple_rubric, sample_chat_session_file):
         consensus=ConsensusConfig(mode="unanimous")
     )
     
-    # Mock the OpenAI client and capture the API call parameters
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion and capture the API call parameters
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         evaluate_criterion_with_panel(
             criterion=criterion,
@@ -598,7 +579,7 @@ def test_judge_with_custom_temperature(simple_rubric, sample_chat_session_file):
         )
         
         # Verify that the custom temperature was used
-        call_args = mock_client.chat.completions.create.call_args
+        call_args = mock_completion.call_args
         assert call_args is not None
         assert call_args.kwargs["temperature"] == 0.7
 
@@ -624,14 +605,12 @@ def test_judge_with_default_temperature(simple_rubric, sample_chat_session_file)
         consensus=ConsensusConfig(mode="unanimous")
     )
     
-    # Mock the OpenAI client and capture the API call parameters
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion and capture the API call parameters
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         evaluate_criterion_with_panel(
             criterion=criterion,
@@ -641,7 +620,7 @@ def test_judge_with_default_temperature(simple_rubric, sample_chat_session_file)
         )
         
         # Verify that the default temperature from EVALUATOR_CONFIG was used
-        call_args = mock_client.chat.completions.create.call_args
+        call_args = mock_completion.call_args
         assert call_args is not None
         assert call_args.kwargs["temperature"] == EVALUATOR_CONFIG.temperature
 
@@ -666,14 +645,12 @@ def test_judge_with_custom_max_tokens(simple_rubric, sample_chat_session_file):
         consensus=ConsensusConfig(mode="unanimous")
     )
     
-    # Mock the OpenAI client and capture the API call parameters
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion and capture the API call parameters
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         evaluate_criterion_with_panel(
             criterion=criterion,
@@ -683,7 +660,7 @@ def test_judge_with_custom_max_tokens(simple_rubric, sample_chat_session_file):
         )
         
         # Verify that the custom max_tokens was used
-        call_args = mock_client.chat.completions.create.call_args
+        call_args = mock_completion.call_args
         assert call_args is not None
         assert call_args.kwargs["max_tokens"] == 4096
 
@@ -712,14 +689,12 @@ def test_judge_with_multiple_custom_parameters(simple_rubric, sample_chat_sessio
         consensus=ConsensusConfig(mode="unanimous")
     )
     
-    # Mock the OpenAI client and capture the API call parameters
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
+    # Mock litellm.completion and capture the API call parameters
+    with patch('litellm.completion') as mock_completion:
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
         mock_response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+        mock_completion.return_value = mock_response
         
         evaluate_criterion_with_panel(
             criterion=criterion,
@@ -729,7 +704,7 @@ def test_judge_with_multiple_custom_parameters(simple_rubric, sample_chat_sessio
         )
         
         # Verify that all custom parameters were used
-        call_args = mock_client.chat.completions.create.call_args
+        call_args = mock_completion.call_args
         assert call_args is not None
         assert call_args.kwargs["temperature"] == 0.5
         assert call_args.kwargs["max_tokens"] == 2048
@@ -776,18 +751,14 @@ def test_judge_panel_with_varied_parameters(simple_rubric, sample_chat_session_f
     # Track API calls to verify each judge uses its own parameters
     call_params = []
     
-    def mock_create(*args, **kwargs):
+    def mock_completion_call(*args, **kwargs):
         call_params.append(kwargs.copy())
         response = MagicMock()
         response.choices = [MagicMock()]
         response.choices[0].message.content = "RESULT: PASS\nREASON: Correct."
         return response
     
-    with patch('rubric_kit.llm_judge.OpenAI') as mock_openai:
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.side_effect = mock_create
-        mock_openai.return_value = mock_client
-        
+    with patch('litellm.completion', side_effect=mock_completion_call):
         evaluate_criterion_with_panel(
             criterion=criterion,
             chat_content=chat_content,

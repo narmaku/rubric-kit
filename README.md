@@ -6,12 +6,12 @@ Rubric framework. Create, refine, and apply evaluation rubrics powered by AI.
 
 - **Rubric Generation** - Create rubrics from Q&A pairs or chat sessions
 - **Multi-Judge Panel** - Multiple LLMs with consensus mechanisms (quorum, majority, unanimous)
+- **Multi-Provider Support** - OpenAI, Google Vertex AI, IBM WatsonX, Anthropic, Ollama, and 100+ providers via LiteLLM
 - **Flexible Grading** - Binary (pass/fail) and score-based (0-3 scale) grading
 - **Tool Call Validation** - Define required, optional, and prohibited tool calls
 - **PDF Reports** - Comprehensive reports with charts and breakdowns
 - **Export Formats** - YAML (source of truth), PDF, CSV, JSON
 - **Self-Contained Outputs** - Re-run evaluations from previous results
-- **OpenAI Compatible** - Works with any OpenAI-compatible endpoint
 
 ## Installation
 
@@ -44,6 +44,60 @@ rubric-kit evaluate --from-chat-session chat.txt --rubric-file rubric.yaml --out
 rubric-kit export results.yaml --format pdf --output report.pdf
 ```
 
+## LLM Provider Setup
+
+Rubric Kit uses [LiteLLM](https://docs.litellm.ai/) to support 100+ LLM providers. API keys are configured via environment variables (never in config files or CLI arguments).
+
+### Some Supported Providers (most popular)
+
+| Provider | Model Format | Environment Variables |
+|----------|--------------|----------------------|
+| **OpenAI** | `gpt-4`, `gpt-4o` | `OPENAI_API_KEY` |
+| **Google AI Studio** | `gemini/gemini-2.5-flash` | `GEMINI_API_KEY` |
+| **Google Vertex AI** | `vertex_ai/gemini-2.5-flash` | `gcloud auth` or `GOOGLE_APPLICATION_CREDENTIALS` |
+| **IBM WatsonX** | `watsonx/meta-llama/llama-3-8b-instruct` | `WATSONX_APIKEY`, `WATSONX_PROJECT_ID` |
+| **Anthropic** | `claude-3-5-sonnet-20241022` | `ANTHROPIC_API_KEY` |
+| **Ollama (local)** | `ollama/llama3.1` | None (uses `localhost:11434`) |
+| **Ollama (remote)** | `ollama/granite4` | `OLLAMA_API_BASE` |
+| **Azure OpenAI** | `azure/gpt-4` | `AZURE_API_KEY`, `AZURE_API_BASE` |
+
+> 📚 **Full documentation**: See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) for complete list of supported providers, model formats, and required environment variables.
+
+### CLI Examples
+
+```bash
+# OpenAI
+export OPENAI_API_KEY="sk-..."
+rubric-kit generate --from-qna qna.yaml --output-file rubric.yaml --model gpt-4o
+
+# Google AI Studio (Gemini)
+export GEMINI_API_KEY="..."
+rubric-kit generate --from-qna qna.yaml --output-file rubric.yaml --model gemini/gemini-2.5-flash
+
+# Google Vertex AI
+gcloud auth application-default login
+rubric-kit generate --from-qna qna.yaml --output-file rubric.yaml --model vertex_ai/gemini-2.5-flash
+
+# IBM WatsonX
+export WATSONX_APIKEY="..."
+export WATSONX_PROJECT_ID="..."
+rubric-kit generate --from-qna qna.yaml --output-file rubric.yaml --model watsonx/meta-llama/llama-3-8b-instruct
+
+# Local Ollama
+rubric-kit generate --from-qna qna.yaml --output-file rubric.yaml --model ollama/llama3
+```
+
+### OpenAI-Compatible Endpoints
+
+For custom OpenAI-compatible endpoints (vLLM, LocalAI, etc.), use `base_url`:
+
+```yaml
+judges:
+  - name: custom-endpoint
+    model: mistral-7b  # Model name as expected by your endpoint
+    base_url: http://your-endpoint:8000/v1
+```
+
 ## Commands
 
 | Command | Description |
@@ -67,6 +121,10 @@ See [`examples/`](examples/) for complete format examples:
 - [`arena.example.yaml`](examples/arena.example.yaml) - Arena competition spec
 
 ### Rubric Structure
+
+Below you will find a very basic rubric to understand how it is composed.
+
+TODO: For Rubrics best practices, please read the [RUBRICS](RUBRICS.md) file.
 
 ```yaml
 dimensions:
@@ -104,12 +162,12 @@ criteria:
 ```yaml
 judge_panel:
   judges:
-    - name: primary
-      model: gpt-4
-      api_key: ${OPENAI_API_KEY}
-    - name: secondary
-      model: gpt-4-turbo
-      api_key: ${OPENAI_API_KEY}
+    - name: ChatGPT-4o
+      model: gpt-4o
+    - name: Gemini-2.5-Flash
+      model: vertex_ai/gemini-2.5-flash
+    - name: Claude-4.5-Sonnet
+      model: anthropic/claude-4-5-sonnet
 
   execution:
     mode: parallel  # sequential, parallel, batched
@@ -152,8 +210,6 @@ pytest --cov=rubric_kit --cov-report=html
 # Format code
 black rubric_kit tests
 ```
-
-See [`CLAUDE.md`](CLAUDE.md) for contribution guidelines.
 
 ## License
 

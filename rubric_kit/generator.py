@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from openai import OpenAI
+import litellm
 
 from rubric_kit.schema import Rubric, Dimension, Criterion
 from rubric_kit.prompts import (
@@ -492,21 +492,32 @@ def _merge_dimensions(
 
 
 class RubricGenerator:
-    """Generate rubrics from Q&A pairs using LLM."""
+    """Generate rubrics from Q&A pairs using LLM.
     
-    def __init__(self, api_key: str, model: str = "gpt-4", base_url: Optional[str] = None):
+    Supports multiple LLM providers via LiteLLM:
+    - OpenAI: model="gpt-4" or "gpt-4o"
+    - Google Vertex AI: model="vertex_ai/gemini-2.5-flash"
+    - IBM WatsonX: model="watsonx/meta-llama/llama-3-8b-instruct"
+    - Anthropic: model="claude-3-5-sonnet-20241022"
+    - Local Ollama: model="ollama/llama3"
+    """
+    
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4", base_url: Optional[str] = None):
         """
         Initialize RubricGenerator.
         
         Args:
-            api_key: OpenAI API key
-            model: Model name to use
-            base_url: Optional base URL for OpenAI-compatible endpoint
+            api_key: Optional API key. If not provided, LiteLLM will auto-detect
+                    from environment variables based on the model/provider.
+            model: Model name to use. Use LiteLLM format for non-OpenAI providers:
+                   - "gpt-4" for OpenAI
+                   - "vertex_ai/gemini-2.5-flash" for Google Vertex AI
+                   - "watsonx/meta-llama/llama-3-8b-instruct" for IBM WatsonX
+            base_url: Optional base URL for OpenAI-compatible endpoints
         """
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
     
     def generate_dimensions(
         self,
@@ -873,7 +884,7 @@ class RubricGenerator:
     
     def _call_llm(self, prompt: str, **kwargs) -> Any:
         """
-        Call LLM and parse JSON response.
+        Call LLM via LiteLLM and parse JSON response.
         
         Args:
             prompt: Prompt to send to LLM
@@ -885,9 +896,9 @@ class RubricGenerator:
         Raises:
             ValueError: If response is not valid JSON or was truncated
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+        api_params = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": GENERATOR_CONFIG.system_prompt
@@ -897,9 +908,19 @@ class RubricGenerator:
                     "content": prompt
                 }
             ],
-            temperature=GENERATOR_CONFIG.temperature,
-            max_tokens=GENERATOR_CONFIG.max_tokens
-        )
+            "temperature": GENERATOR_CONFIG.temperature,
+            "max_tokens": GENERATOR_CONFIG.max_tokens
+        }
+        
+        # Add explicit API key if provided
+        if self.api_key:
+            api_params["api_key"] = self.api_key
+        
+        # Add custom base URL if provided (for OpenAI-compatible endpoints)
+        if self.base_url:
+            api_params["api_base"] = self.base_url
+        
+        response = litellm.completion(**api_params)
         
         # Check if response was truncated
         finish_reason = response.choices[0].finish_reason
