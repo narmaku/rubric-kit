@@ -1,7 +1,6 @@
 """YAML validation logic for rubric files."""
 
 import yaml
-import os
 import re
 from pathlib import Path
 from typing import Dict, List, Any, Union, Optional
@@ -16,50 +15,6 @@ from rubric_kit.schema import (
 class RubricValidationError(Exception):
     """Custom exception for rubric validation errors."""
     pass
-
-
-def _replace_env_var(match: re.Match) -> str:
-    """Replace a single environment variable match."""
-    var_name = match.group(1)
-    default_value = match.group(2)
-    
-    value = os.getenv(var_name)
-    if value is not None:
-        return value
-    
-    if default_value is not None:
-        return default_value
-    
-    # If no default provided, keep the original syntax
-    return match.group(0)
-
-
-def expand_env_vars(data: Any) -> Any:
-    """
-    Recursively expand environment variables in YAML data.
-    
-    Supports the following syntax:
-    - ${ENV_VAR_NAME} - expands to environment variable value
-    - ${ENV_VAR_NAME:-default_value} - expands with default if not set
-    
-    Args:
-        data: YAML data structure (dict, list, string, or primitive)
-        
-    Returns:
-        Data with environment variables expanded
-    """
-    if isinstance(data, dict):
-        return {key: expand_env_vars(value) for key, value in data.items()}
-    
-    if isinstance(data, list):
-        return [expand_env_vars(item) for item in data]
-    
-    if isinstance(data, str):
-        # Pattern matches ${VAR_NAME} or ${VAR_NAME:-default}
-        pattern = r'\$\{([^}:]+)(?::-([^}]*))?\}'
-        return re.sub(pattern, _replace_env_var, data)
-    
-    return data
 
 
 def substitute_variables(text: Optional[str], variables: Dict[str, str]) -> Optional[str]:
@@ -243,7 +198,7 @@ def _load_yaml_file(yaml_path: str) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise RubricValidationError("YAML must contain a dictionary")
     
-    return expand_env_vars(data)
+    return data
 
 
 def _parse_dimensions(dimensions_data: Any) -> List[Dimension]:
@@ -335,9 +290,6 @@ def load_variables_file(yaml_path: str) -> Dict[str, str]:
     
     if not isinstance(data, dict):
         raise RubricValidationError("Variables file must contain a dictionary of key-value pairs")
-    
-    # Expand environment variables in the loaded data
-    data = expand_env_vars(data)
     
     variables = _parse_variables(data)
     if variables is None:

@@ -48,24 +48,21 @@ def handle_command_errors(func: Callable) -> Callable:
     return wrapper
 
 
-def get_api_key(args_api_key: Optional[str]) -> str:
-    """Get API key from args or environment variable."""
-    api_key = args_api_key or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "API key required. Set OPENAI_API_KEY environment variable or use --api-key"
-        )
-    return api_key
-
-
 def create_default_panel_config(args) -> JudgePanelConfig:
-    """Create a default single-judge panel configuration."""
-    api_key = get_api_key(args.api_key)
+    """Create a default single-judge panel configuration.
+    
+    Uses LiteLLM for provider auto-detection. API keys are read from
+    environment variables based on the model's provider:
+    - OPENAI_API_KEY for OpenAI models
+    - GEMINI_API_KEY for Google Gemini  
+    - WATSONX_APIKEY for IBM WatsonX
+    - ANTHROPIC_API_KEY for Anthropic
+    - etc.
+    """
     return JudgePanelConfig(
         judges=[JudgeConfig(
             name="default",
             model=args.model,
-            api_key=api_key,
             base_url=args.base_url
         )],
         execution=ExecutionConfig(mode="sequential"),
@@ -74,10 +71,12 @@ def create_default_panel_config(args) -> JudgePanelConfig:
 
 
 def create_generator(args) -> RubricGenerator:
-    """Create and return a RubricGenerator instance."""
-    api_key = get_api_key(args.api_key)
+    """Create and return a RubricGenerator instance.
+    
+    Uses LiteLLM for provider auto-detection. API keys are read from
+    environment variables based on the model's provider.
+    """
     return RubricGenerator(
-        api_key=api_key,
         model=args.model,
         base_url=args.base_url
     )
@@ -653,20 +652,17 @@ def rebuild_rubric_from_dict(rubric_data: Dict[str, Any]) -> Rubric:
     return Rubric(dimensions=dimensions, criteria=criteria)
 
 
-def rebuild_panel_config_from_dict(panel_data: Dict[str, Any], api_key: Optional[str] = None) -> JudgePanelConfig:
-    """Rebuild a JudgePanelConfig from portable dictionary format."""
-    # Get API key from environment if not provided
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("API key required. Set OPENAI_API_KEY environment variable or use --api-key")
+def rebuild_panel_config_from_dict(panel_data: Dict[str, Any]) -> JudgePanelConfig:
+    """Rebuild a JudgePanelConfig from portable dictionary format.
     
+    Uses LiteLLM for provider auto-detection. API keys are read from
+    environment variables based on the model's provider.
+    """
     judges = []
     for j_data in panel_data.get("judges", []):
         judges.append(JudgeConfig(
             name=j_data["name"],
             model=j_data["model"],
-            api_key=api_key,  # Always use provided/env API key
             base_url=j_data.get("base_url"),
             temperature=j_data.get("temperature"),
             max_tokens=j_data.get("max_tokens"),
@@ -711,7 +707,7 @@ def cmd_rerun(args) -> int:
     print(f"✓ Rebuilt rubric: {len(rubric.dimensions)} dimensions, {len(rubric.criteria)} criteria")
     
     # Rebuild panel config from stored data
-    panel_config = rebuild_panel_config_from_dict(data["judge_panel"], args.api_key)
+    panel_config = rebuild_panel_config_from_dict(data["judge_panel"])
     print(f"✓ Rebuilt judge panel: {len(panel_config.judges)} judge(s)")
     
     # Determine input source
@@ -1610,19 +1606,14 @@ Examples:
     )
     
     evaluate_parser.add_argument(
-        '--api-key',
-        help='OpenAI API key (or set OPENAI_API_KEY environment variable) - used for default single-judge panel'
-    )
-    
-    evaluate_parser.add_argument(
         '--base-url',
-        help='Base URL for OpenAI-compatible endpoint (optional) - used for default single-judge panel'
+        help='Base URL for OpenAI-compatible endpoint'
     )
     
     evaluate_parser.add_argument(
         '--model',
         default='gpt-4',
-        help='Model name to use for LLM evaluation (default: gpt-4) - used for default single-judge panel'
+        help='Model name (default: gpt-4). LiteLLM format: gpt-4, vertex_ai/gemini-2.5-flash, watsonx/llama-3, ollama/llama3'
     )
     
     evaluate_parser.set_defaults(func=cmd_evaluate)
@@ -1692,19 +1683,14 @@ Examples:
     )
     
     generate_parser.add_argument(
-        '--api-key',
-        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
-    )
-    
-    generate_parser.add_argument(
         '--base-url',
-        help='Base URL for OpenAI-compatible endpoint (optional)'
+        help='Base URL for OpenAI-compatible endpoint'
     )
     
     generate_parser.add_argument(
         '--model',
         default='gpt-4',
-        help='Model name to use for generation (default: gpt-4)'
+        help='Model name (default: gpt-4). LiteLLM format: gpt-4, vertex_ai/gemini-2.5-flash, watsonx/llama-3, ollama/llama3'
     )
     
     generate_parser.add_argument(
@@ -1799,19 +1785,14 @@ Examples:
     )
     
     refine_parser.add_argument(
-        '--api-key',
-        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
-    )
-    
-    refine_parser.add_argument(
         '--base-url',
-        help='Base URL for OpenAI-compatible endpoint (optional)'
+        help='Base URL for OpenAI-compatible endpoint'
     )
     
     refine_parser.add_argument(
         '--model',
         default='gpt-4',
-        help='Model name to use for refinement (default: gpt-4)'
+        help='Model name (default: gpt-4). LiteLLM format: gpt-4, vertex_ai/gemini-2.5-flash, watsonx/llama-3, ollama/llama3'
     )
     
     refine_parser.add_argument(
@@ -1929,11 +1910,6 @@ Examples:
         '--no-table',
         action='store_true',
         help='Do not print results table to console'
-    )
-    
-    rerun_parser.add_argument(
-        '--api-key',
-        help='OpenAI API key (or set OPENAI_API_KEY environment variable)'
     )
     
     rerun_parser.set_defaults(func=cmd_rerun)
