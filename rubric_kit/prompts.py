@@ -106,17 +106,23 @@ Note: If respect_order=false, order is not checked. If no params specified, para
 _VARIABLES_GUIDANCE = """**IMPORTANT - Variables:**
 - Extract specific data values (e.g. names, numbers, identifiers, IP addresses, memory amounts, OS names, percentages, etc.) to a "variables" section
 - Variables should ONLY contain actual, correct values from the source data - NOT examples of incorrect values or placeholders
-- Use {{{{variable_name}}}} placeholders in criterion text AND tool_calls params instead of hard-coded values
+- Use {{variable_name}} placeholders in criterion text AND tool_calls params instead of hard-coded values
 - This makes the rubric reusable with different data
 - If variables already exist, preserve them and add any new ones needed"""
+
+_NO_VARIABLES_GUIDANCE = """**IMPORTANT - No Variables Mode:**
+- Do NOT create a variables section
+- Use hard-coded values directly in criterion text and tool_calls params
+- Write specific, concrete values directly into the criteria (e.g., "IP address is '10.0.187.159'" not "IP address is '{{ip_address}}'")
+- This creates a rubric specific to this exact input"""
 
 _ATOMIC_CRITERIA_GUIDANCE = """**CRITICAL - Atomic Factual Accuracy Criteria:**
 - Each factual accuracy criterion MUST check exactly ONE atomic value
 - NEVER combine multiple values in a single criterion
-- BAD: "The response reports RAM (~{{{{ram_total}}}}) and disk size ({{{{disk_size}}}})" - Mixes two values!
+- BAD: "The response reports RAM (~{{ram_total}}) and disk size ({{disk_size}})" - Mixes two values!
 - GOOD: Split into separate criteria:
-  1. "The response correctly reports RAM as ~{{{{ram_total}}}}"
-  2. "The response correctly reports disk size as {{{{disk_size}}}}"
+  1. "The response correctly reports RAM as ~{{ram_total}}"
+  2. "The response correctly reports disk size as {{disk_size}}"
 - This ensures clear pass/fail evaluation for each individual fact
 - If an existing criterion mixes multiple values, SPLIT it into separate atomic criteria"""
 
@@ -153,7 +159,7 @@ _JSON_OUTPUT_FORMAT = """Return ONLY a JSON object with this format:
       "criterion": "Must call essential tools.",
       "tool_calls": {{
         "respect_order": false,
-        "required": [{{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{{{host}}}}"}}}}]
+        "required": [{{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{host}}"}}}}]
       }}
     }},
     {{
@@ -161,12 +167,45 @@ _JSON_OUTPUT_FORMAT = """Return ONLY a JSON object with this format:
       "category": "Accuracy",
       "weight": 3,
       "dimension": "factual_accuracy",
-      "criterion": "IP address is '{{{{ip_address}}}}'."
+      "criterion": "IP address is '{{ip_address}}'."
     }}
   ]
 }}
 
 Note: Scoring is inferred from tool lists (required/optional/prohibited). Omit tool_calls for non-tool criteria."""
+
+_JSON_OUTPUT_FORMAT_NO_VARS = """Return ONLY a JSON object with this format (NO variables section):
+{{
+  "dimensions": [
+    {{
+      "name": "dimension_name",
+      "description": "Clear description",
+      "grading_type": "binary"
+    }}
+  ],
+  "criteria": [
+    {{
+      "name": "core_tools",
+      "category": "Tools",
+      "weight": 3,
+      "dimension": "tool_use",
+      "criterion": "Must call essential tools.",
+      "tool_calls": {{
+        "respect_order": false,
+        "required": [{{"name": "get_system_info", "min_calls": 1, "params": {{"host": "server01"}}}}]
+      }}
+    }},
+    {{
+      "name": "fact_check",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "IP address is '10.0.187.159'."
+    }}
+  ]
+}}
+
+Note: Use hard-coded values directly in criteria - do NOT use variable placeholders."""
 
 
 # =============================================================================
@@ -935,7 +974,8 @@ def build_dimension_generation_prompt(
     question: str,
     answer: str,
     num_dimensions: Optional[int],
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    guidelines: Optional[str] = None
 ) -> str:
     """
     Build a prompt for generating evaluation dimensions from a Q&A pair.
@@ -945,11 +985,13 @@ def build_dimension_generation_prompt(
         answer: The answer being evaluated
         num_dimensions: Number of dimensions to generate, or None for auto
         context: Optional additional context
+        guidelines: Optional specific guidelines/hints to guide dimension generation
         
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
+    guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
     
     count_instruction = (
         f"Generate {num_dimensions} evaluation dimensions"
@@ -961,7 +1003,7 @@ def build_dimension_generation_prompt(
 
 Question: {question}
 
-Answer: {answer}{context_info}
+Answer: {answer}{context_info}{guidelines_section}
 
 Each dimension should:
 1. Have a unique, descriptive name (lowercase with underscores, e.g., "factual_correctness")
@@ -1016,7 +1058,9 @@ def build_criteria_generation_prompt(
     dimensions: List[Dimension],
     num_criteria: Optional[int],
     category_hints: Optional[List[str]] = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    use_variables: bool = True,
+    guidelines: Optional[str] = None
 ) -> str:
     """
     Build a prompt for generating evaluation criteria from Q&A and dimensions.
@@ -1028,11 +1072,14 @@ def build_criteria_generation_prompt(
         num_criteria: Number of criteria to generate, or None for auto
         category_hints: Optional list of category names to guide generation
         context: Optional additional context
+        use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+        guidelines: Optional specific guidelines/hints to guide criteria generation
         
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
+    guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
     
     # Format dimensions for prompt
     dimensions_str = "\n".join([
@@ -1052,21 +1099,97 @@ def build_criteria_generation_prompt(
         else "generate an appropriate number of specific evaluation criteria (between 5 and 10, as many as needed to thoroughly evaluate the answer)"
     )
     
+    if use_variables:
+        variables_section = """**IMPORTANT - Variables Section:**
+Extract specific data values from the answer (names, numbers, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{variable_name}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values. This makes the rubric reusable with different data."""
+        
+        criteria_item_2 = """2. **Use variables for specific values** - extract specific data values to the variables section and reference them using {{variable_name}} syntax"""
+        
+        atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The answer correctly reports RAM (~{{ram_total}}) and disk size ({{disk_size}})" - This mixes two values!
+- RIGHT: Create TWO separate criteria:
+  1. "The answer correctly reports RAM as ~{{ram_total}}"
+  2. "The answer correctly reports disk size as {{disk_size}}"
+- Each factual accuracy criterion should verify ONE atomic value against ground truth"""
+        
+        criterion_field = """- criterion: Specific text describing what to check, using {{variable_name}} for specific values (or "from_scores" for score dimensions)"""
+        
+        json_example = """Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
+{
+  "variables": {
+    "capital_city": "Paris",
+    "country_name": "France"
+  },
+  "criteria": [
+    {
+      "name": "capital_accuracy",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_correctness",
+      "criterion": "The answer must correctly identify {{capital_city}} as the capital of {{country_name}}"
+    },
+    {
+      "name": "completeness_score",
+      "category": "Completeness",
+      "weight": "from_scores",
+      "dimension": "completeness",
+      "criterion": "from_scores"
+    }
+  ]
+}
+
+Note: Extract ALL specific data values (names, numbers, identifiers, etc.) to the variables section."""
+    else:
+        variables_section = """**IMPORTANT - No Variables Mode:**
+Do NOT create a variables section. Use hard-coded values directly in criterion text and tool_calls params. Write specific, concrete values directly into the criteria."""
+        
+        criteria_item_2 = """2. **Use hard-coded values** - write specific values directly into criteria (e.g., "IP address is '10.0.187.159'" not "IP address is '{{ip_address}}'")"""
+        
+        atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The answer correctly reports RAM (~1.7GB) and disk size (50GB)" - This mixes two values!
+- RIGHT: Create TWO separate criteria:
+  1. "The answer correctly reports RAM as ~1.7GB"
+  2. "The answer correctly reports disk size as 50GB"
+- Each factual accuracy criterion should verify ONE atomic value against ground truth"""
+        
+        criterion_field = """- criterion: Specific text describing what to check with hard-coded values (or "from_scores" for score dimensions)"""
+        
+        json_example = """Return ONLY a JSON object with "criteria" key (NO variables section). Example format:
+{
+  "criteria": [
+    {
+      "name": "capital_accuracy",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_correctness",
+      "criterion": "The answer must correctly identify Paris as the capital of France"
+    },
+    {
+      "name": "completeness_score",
+      "category": "Completeness",
+      "weight": "from_scores",
+      "dimension": "completeness",
+      "criterion": "from_scores"
+    }
+  ]
+}
+
+Note: Use hard-coded values directly in criteria - do NOT use variable placeholders."""
+    
     return f"""Given the following Question, Answer, and Dimensions, {count_instruction}.
 
 Question: {question}
 
-Answer: {answer}{context_info}
+Answer: {answer}{context_info}{guidelines_section}
 
 Dimensions:
 {dimensions_str}{category_guidance}
 
-**IMPORTANT - Variables Section:**
-Extract specific data values from the answer (names, numbers, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{{{variable_name}}}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values. This makes the rubric reusable with different data.
+{variables_section}
 
 Criteria should be:
 1. **ATOMIC** - each criterion checks exactly ONE specific thing (one fact, one value, one requirement)
-2. **Use variables for specific values** - extract specific data values to the variables section and reference them using {{{{variable_name}}}} syntax
+{criteria_item_2}
 3. **Never mix multiple values in one factual accuracy criterion** - create separate criteria for each value to check
 4. Specific and measurable
 5. Distributed across the provided dimensions
@@ -1074,19 +1197,14 @@ Criteria should be:
 7. Given weights between 0-3 based on importance (3=most important, 0=informational only)
 8. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
 
-**CRITICAL - Atomic Factual Accuracy Criteria:**
-- WRONG: "The answer correctly reports RAM (~{{{{ram_total}}}}) and disk size ({{{{disk_size}}}})" - This mixes two values!
-- RIGHT: Create TWO separate criteria:
-  1. "The answer correctly reports RAM as ~{{{{ram_total}}}}"
-  2. "The answer correctly reports disk size as {{{{disk_size}}}}"
-- Each factual accuracy criterion should verify ONE atomic value against ground truth
+{atomic_examples}
 
 Each criterion should have:
 - name: Unique identifier (lowercase with underscores)
 - category: Category name (will be auto-assigned based on the criterion type)
 - weight: Integer 0-3, or "from_scores" for score-type dimensions
 - dimension: Must reference one of the dimension names above
-- criterion: Specific text describing what to check, using {{{{variable_name}}}} for specific values (or "from_scores" for score dimensions)
+{criterion_field}
 
 **CRITICAL - Weight Constraints:**
 - Criterion weight MUST be an integer from 0 to 3 (inclusive), OR the string "from_scores"
@@ -1095,31 +1213,7 @@ Each criterion should have:
 **CRITICAL - Dimension Reference:**
 - If referencing a dimension with grading_type "score", ensure that dimension has a "scores" dictionary defined
 
-Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
-{{
-  "variables": {{
-    "capital_city": "Paris",
-    "country_name": "France"
-  }},
-  "criteria": [
-    {{
-      "name": "capital_accuracy",
-      "category": "Accuracy",
-      "weight": 3,
-      "dimension": "factual_correctness",
-      "criterion": "The answer must correctly identify {{{{capital_city}}}} as the capital of {{{{country_name}}}}"
-    }},
-    {{
-      "name": "completeness_score",
-      "category": "Completeness",
-      "weight": "from_scores",
-      "dimension": "completeness",
-      "criterion": "from_scores"
-    }}
-  ]
-}}
-
-Note: Extract ALL specific data values (names, numbers, identifiers, etc.) to the variables section."""
+{json_example}"""
 
 
 def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> Dict[str, Any]:
@@ -1157,12 +1251,24 @@ def build_refine_rubric_prompt(
     dimensions: List[Dimension],
     criteria: List[Criterion],
     feedback: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None
+    variables: Optional[Dict[str, str]] = None,
+    use_variables: bool = True
 ) -> str:
-    """Build a prompt for refining an existing rubric."""
-    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables)
+    """Build a prompt for refining an existing rubric.
+    
+    Args:
+        dimensions: List of dimensions to include
+        criteria: List of criteria to include
+        feedback: Optional specific feedback for refinement
+        variables: Optional variables dict to include in rubric
+        use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+    """
+    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
     feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback()
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
+    
+    variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
+    json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
     
     return f"""Refine the following evaluation rubric to improve its quality.
 
@@ -1175,7 +1281,7 @@ Current Rubric:
 
 {_TOOL_SCORING_MODEL}
 
-{_VARIABLES_GUIDANCE}
+{variables_guidance}
 
 {_ATOMIC_CRITERIA_GUIDANCE}
 
@@ -1185,7 +1291,7 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 {_GRANULAR_TOOL_CRITERIA}
 
-{_JSON_OUTPUT_FORMAT}"""
+{json_format}"""
 
 
 def build_refine_rubric_with_qa_prompt(
@@ -1195,13 +1301,28 @@ def build_refine_rubric_with_qa_prompt(
     answer: str,
     feedback: Optional[str] = None,
     context: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None
+    variables: Optional[Dict[str, str]] = None,
+    use_variables: bool = True
 ) -> str:
-    """Build a prompt for refining an existing rubric using Q&A context."""
-    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables)
+    """Build a prompt for refining an existing rubric using Q&A context.
+    
+    Args:
+        dimensions: List of dimensions to include
+        criteria: List of criteria to include
+        question: The question from the Q&A pair
+        answer: The answer from the Q&A pair
+        feedback: Optional specific feedback for refinement
+        context: Optional additional context
+        variables: Optional variables dict to include in rubric
+        use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+    """
+    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("qa")
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
+    
+    variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
+    json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
     
     return f"""Refine the following evaluation rubric to improve its quality, using the Q&A pair as context.
 
@@ -1220,7 +1341,7 @@ Analyze the Q&A pair and refine the rubric to better evaluate answers like the o
 
 {_TOOL_SCORING_MODEL}
 
-{_VARIABLES_GUIDANCE}
+{variables_guidance}
 
 {_ATOMIC_CRITERIA_GUIDANCE}
 
@@ -1228,7 +1349,7 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 {_GRANULAR_TOOL_CRITERIA}
 
-{_JSON_OUTPUT_FORMAT}"""
+{json_format}"""
 
 
 def build_refine_rubric_with_chat_prompt(
@@ -1237,13 +1358,27 @@ def build_refine_rubric_with_chat_prompt(
     chat_content: str,
     feedback: Optional[str] = None,
     context: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None
+    variables: Optional[Dict[str, str]] = None,
+    use_variables: bool = True
 ) -> str:
-    """Build a prompt for refining an existing rubric using chat session context."""
-    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables)
+    """Build a prompt for refining an existing rubric using chat session context.
+    
+    Args:
+        dimensions: List of dimensions to include
+        criteria: List of criteria to include
+        chat_content: The chat session content
+        feedback: Optional specific feedback for refinement
+        context: Optional additional context
+        variables: Optional variables dict to include in rubric
+        use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+    """
+    rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("chat")
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
+    
+    variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
+    json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
     
     return f"""Refine the following evaluation rubric to improve its quality, using the chat session as context.
 
@@ -1261,7 +1396,7 @@ Analyze the chat session and refine the rubric to better evaluate similar intera
 
 {_TOOL_SCORING_MODEL}
 
-{_VARIABLES_GUIDANCE}
+{variables_guidance}
 
 {_ATOMIC_CRITERIA_GUIDANCE}
 
@@ -1269,13 +1404,14 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 {_GRANULAR_TOOL_CRITERIA}
 
-{_JSON_OUTPUT_FORMAT}"""
+{json_format}"""
 
 
 def build_chat_dimension_generation_prompt(
     chat_content: str,
     num_dimensions: Optional[int],
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    guidelines: Optional[str] = None
 ) -> str:
     """
     Build a prompt for generating evaluation dimensions from a chat session.
@@ -1284,11 +1420,13 @@ def build_chat_dimension_generation_prompt(
         chat_content: The raw chat session content
         num_dimensions: Number of dimensions to generate, or None for auto
         context: Optional additional context
+        guidelines: Optional specific guidelines/hints to guide dimension generation
         
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
+    guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
     
     count_instruction = (
         f"Generate {num_dimensions} evaluation dimensions"
@@ -1299,7 +1437,7 @@ def build_chat_dimension_generation_prompt(
     return f"""Given the following chat session, {count_instruction} for assessing the assistant's performance.
 
 **Chat Session:**
-{chat_content}{context_info}
+{chat_content}{context_info}{guidelines_section}
 
 **Instructions:**
 Analyze the chat session above to understand what happened. Consider:
@@ -1385,7 +1523,9 @@ def build_chat_criteria_generation_prompt(
     dimensions: List[Dimension],
     num_criteria: Optional[int],
     category_hints: Optional[List[str]] = None,
-    context: Optional[str] = None
+    context: Optional[str] = None,
+    use_variables: bool = True,
+    guidelines: Optional[str] = None
 ) -> str:
     """
     Build a prompt for generating evaluation criteria from a chat session.
@@ -1396,11 +1536,14 @@ def build_chat_criteria_generation_prompt(
         num_criteria: Number of criteria to generate, or None for auto
         category_hints: Optional list of category names to guide generation
         context: Optional additional context
+        use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+        guidelines: Optional specific guidelines/hints to guide criteria generation
         
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
+    guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
     
     # Format dimensions for prompt
     dimensions_str = "\n".join([
@@ -1420,10 +1563,127 @@ def build_chat_criteria_generation_prompt(
         else "generate an appropriate number of specific evaluation criteria (between 7 and 12, create enough to check all important aspects including tool calls and key facts)"
     )
     
+    if use_variables:
+        variables_section = """**IMPORTANT - Variables Section:**
+Extract specific data values from the chat session (IP addresses, RAM amounts, percentages, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{variable_name}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values."""
+        
+        criteria_item_3 = """3. **Use variables** - reference values using {{variable_name}} syntax"""
+        
+        atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The response correctly states the RAM (~{{ram_total}}) and IP address ({{ip_address}})" - Mixes two values!
+- RIGHT: Create SEPARATE criteria:
+  1. "The response correctly states RAM as ~{{ram_total}}"
+  2. "The response correctly states IP address as {{ip_address}}"
+- ONE value per factual accuracy criterion - no exceptions"""
+        
+        json_example = """Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
+{
+  "variables": {
+    "ip_address": "10.0.187.159",
+    "ram_total": "1.7GB",
+    "host": "server01"
+  },
+  "criteria": [
+    {
+      "name": "core_tools_called",
+      "category": "Tools",
+      "weight": 3,
+      "dimension": "tool_use",
+      "criterion": "Must call essential diagnostic tools.",
+      "tool_calls": {
+        "respect_order": false,
+        "required": [
+          {"name": "get_system_info", "min_calls": 1, "params": {"host": "{{host}}"}},
+          {"name": "get_memory_info", "min_calls": 1}
+        ]
+      }
+    },
+    {
+      "name": "optional_diagnostics",
+      "category": "Tools",
+      "weight": 1,
+      "dimension": "tool_use",
+      "criterion": "Extra credit for additional diagnostics.",
+      "tool_calls": {
+        "optional": [
+          {"name": "get_network_interfaces", "min_calls": 1}
+        ]
+      }
+    },
+    {
+      "name": "no_dangerous_ops",
+      "category": "Tools",
+      "weight": 2,
+      "dimension": "tool_use",
+      "criterion": "Must not call destructive operations.",
+      "tool_calls": {
+        "prohibited": [
+          {"name": "reboot_system"}
+        ]
+      }
+    },
+    {
+      "name": "ip_address_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "The response correctly states the IP address is '{{ip_address}}'."
+    }
+  ]
+}
+
+Note: 
+- Extract actual tool names from the chat session
+- Scoring inferred from lists: required=pass/fail, optional=bonus, prohibited=penalty
+- Extract ALL specific data values to the variables section"""
+    else:
+        variables_section = """**IMPORTANT - No Variables Mode:**
+Do NOT create a variables section. Use hard-coded values directly in criterion text and tool_calls params. Write specific, concrete values directly into the criteria."""
+        
+        criteria_item_3 = """3. **Use hard-coded values** - write specific values directly into criteria (e.g., "IP address is '10.0.187.159'" not "IP address is '{{ip_address}}'")"""
+        
+        atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
+- WRONG: "The response correctly states the RAM (~1.7GB) and IP address (10.0.187.159)" - Mixes two values!
+- RIGHT: Create SEPARATE criteria:
+  1. "The response correctly states RAM as ~1.7GB"
+  2. "The response correctly states IP address as 10.0.187.159"
+- ONE value per factual accuracy criterion - no exceptions"""
+        
+        json_example = """Return ONLY a JSON object with "criteria" key (NO variables section). Example format:
+{
+  "criteria": [
+    {
+      "name": "core_tools_called",
+      "category": "Tools",
+      "weight": 3,
+      "dimension": "tool_use",
+      "criterion": "Must call essential diagnostic tools.",
+      "tool_calls": {
+        "respect_order": false,
+        "required": [
+          {"name": "get_system_info", "min_calls": 1, "params": {"host": "server01"}},
+          {"name": "get_memory_info", "min_calls": 1}
+        ]
+      }
+    },
+    {
+      "name": "ip_address_correct",
+      "category": "Accuracy",
+      "weight": 3,
+      "dimension": "factual_accuracy",
+      "criterion": "The response correctly states the IP address is '10.0.187.159'."
+    }
+  ]
+}
+
+Note: 
+- Extract actual tool names from the chat session
+- Use hard-coded values directly in criteria - do NOT use variable placeholders"""
+    
     return f"""Given the following chat session and dimensions, {count_instruction}.
 
 **Chat Session:**
-{chat_content}{context_info}
+{chat_content}{context_info}{guidelines_section}
 
 **Dimensions:**
 {dimensions_str}{category_guidance}
@@ -1431,8 +1691,7 @@ def build_chat_criteria_generation_prompt(
 **Instructions:**
 Analyze the chat session above. If you detect tool calls in the session, create criteria that evaluate them.
 
-**IMPORTANT - Variables Section:**
-Extract specific data values from the chat session (IP addresses, RAM amounts, percentages, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{{{variable_name}}}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values.
+{variables_section}
 
 **CRITICAL - Granular Tool Criteria:**
 When evaluating tool usage, create SEPARATE criteria for different tool categories. Scoring is inferred from which lists are populated:
@@ -1454,19 +1713,14 @@ When evaluating tool usage, create SEPARATE criteria for different tool categori
 Criteria should be:
 1. **ATOMIC** - each criterion checks exactly ONE specific thing (one fact, one value, one tool requirement)
 2. **Fact-based where possible** - create separate criteria for each distinct fact or data point
-3. **Use variables** - reference values using {{{{variable_name}}}} syntax
+{criteria_item_3}
 4. **Never mix multiple values in one factual accuracy criterion** - this is critical for reliable evaluation
 5. Measurable and unambiguous
 6. Distributed across the provided dimensions
 7. Given weights between 0-3 based on importance (3=most important, 0=informational only)
 8. For score-type dimensions, use weight="from_scores" and criterion="from_scores"
 
-**CRITICAL - Atomic Factual Accuracy Criteria:**
-- WRONG: "The response correctly states the RAM (~{{{{ram_total}}}}) and IP address ({{{{ip_address}}}})" - Mixes two values!
-- RIGHT: Create SEPARATE criteria:
-  1. "The response correctly states RAM as ~{{{{ram_total}}}}"
-  2. "The response correctly states IP address as {{{{ip_address}}}}"
-- ONE value per factual accuracy criterion - no exceptions
+{atomic_examples}
 
 Each criterion should have:
 - name: Unique identifier (lowercase with underscores)
@@ -1483,63 +1737,4 @@ Each criterion should have:
 **CRITICAL - Dimension Reference:**
 - If referencing a dimension with grading_type "score", ensure that dimension has a "scores" dictionary defined
 
-Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
-{{
-  "variables": {{
-    "ip_address": "10.0.187.159",
-    "ram_total": "1.7GB",
-    "host": "server01"
-  }},
-  "criteria": [
-    {{
-      "name": "core_tools_called",
-      "category": "Tools",
-      "weight": 3,
-      "dimension": "tool_use",
-      "criterion": "Must call essential diagnostic tools.",
-      "tool_calls": {{
-        "respect_order": false,
-        "required": [
-          {{"name": "get_system_info", "min_calls": 1, "params": {{"host": "{{{{host}}}}"}}}},
-          {{"name": "get_memory_info", "min_calls": 1}}
-        ]
-      }}
-    }},
-    {{
-      "name": "optional_diagnostics",
-      "category": "Tools",
-      "weight": 1,
-      "dimension": "tool_use",
-      "criterion": "Extra credit for additional diagnostics.",
-      "tool_calls": {{
-        "optional": [
-          {{"name": "get_network_interfaces", "min_calls": 1}}
-        ]
-      }}
-    }},
-    {{
-      "name": "no_dangerous_ops",
-      "category": "Tools",
-      "weight": 2,
-      "dimension": "tool_use",
-      "criterion": "Must not call destructive operations.",
-      "tool_calls": {{
-        "prohibited": [
-          {{"name": "reboot_system"}}
-        ]
-      }}
-    }},
-    {{
-      "name": "ip_address_correct",
-      "category": "Accuracy",
-      "weight": 3,
-      "dimension": "factual_accuracy",
-      "criterion": "The response correctly states the IP address is '{{{{ip_address}}}}'."
-    }}
-  ]
-}}
-
-Note: 
-- Extract actual tool names from the chat session
-- Scoring inferred from lists: required=pass/fail, optional=bonus, prohibited=penalty
-- Extract ALL specific data values to the variables section"""
+{json_example}"""

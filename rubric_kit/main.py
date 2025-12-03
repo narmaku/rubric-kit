@@ -257,6 +257,37 @@ def read_input_content(input_file: str) -> str:
         return f.read()
 
 
+def resolve_text_from_args(
+    inline_value: Optional[str],
+    file_path: Optional[str],
+    arg_name: str
+) -> Optional[str]:
+    """
+    Resolve text content from either inline argument or file.
+    
+    Args:
+        inline_value: The inline text value (e.g., from --guidelines)
+        file_path: Path to file containing text (e.g., from --guidelines-file)
+        arg_name: Name of the argument for error messages (e.g., "guidelines")
+        
+    Returns:
+        The resolved text content, or None if neither provided
+        
+    Raises:
+        FileNotFoundError: If file_path is provided but file doesn't exist
+    """
+    if inline_value:
+        return inline_value
+    
+    if file_path:
+        if not os.path.exists(file_path):
+            raise FileNotFoundError(f"{arg_name.capitalize()} file not found: {file_path}")
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    
+    return None
+
+
 @handle_command_errors
 def cmd_evaluate(args) -> int:
     """
@@ -422,6 +453,19 @@ def cmd_generate(args) -> int:
         category_hints = [c.strip() for c in args.categories.split(',')]
         print(f"   Category hints: {', '.join(category_hints)}")
     
+    # Resolve guidelines from inline or file
+    guidelines = resolve_text_from_args(
+        getattr(args, 'guidelines', None),
+        getattr(args, 'guidelines_file', None),
+        'guidelines'
+    )
+    
+    # Show guidelines if provided
+    if guidelines:
+        guidelines_preview = guidelines[:60] + "..." if len(guidelines) > 60 else guidelines
+        source = "(from file)" if getattr(args, 'guidelines_file', None) else ""
+        print(f"   Guidelines{source}: {guidelines_preview}")
+    
     # Initialize generator
     print(f"\n🤖 Initializing rubric generator...")
     print(f"   Model: {args.model}")
@@ -440,13 +484,20 @@ def cmd_generate(args) -> int:
     # Generate rubric
     print_generation_progress(num_dimensions, num_criteria)
     
+    # Determine if variables should be used (default is True, --no-variables sets it to False)
+    use_variables = not getattr(args, 'no_variables', False)
+    if not use_variables:
+        print("   Mode: No variables (hard-coded values)")
+    
     if input_type == "chat":
         rubric = generator.generate_rubric_from_chat(
             input_obj,
             num_dimensions=num_dimensions,
             num_criteria=num_criteria,
             category_hints=category_hints,
-            dimensions=provided_dimensions
+            dimensions=provided_dimensions,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
     else:
         rubric = generator.generate_rubric(
@@ -454,12 +505,16 @@ def cmd_generate(args) -> int:
             num_dimensions=num_dimensions,
             num_criteria=num_criteria,
             category_hints=category_hints,
-            dimensions=provided_dimensions
+            dimensions=provided_dimensions,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
     
     print(f"✓ Generated {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
     if rubric.variables:
         print(f"   Variables extracted: {len(rubric.variables)}")
+    elif use_variables:
+        print("   Note: No variables extracted from content")
     
     # Write rubric to file
     print(f"\nWriting rubric to {args.output_file}...")
@@ -834,39 +889,59 @@ def cmd_refine(args) -> int:
         dimensions_to_merge = parse_dimensions_file(args.dimensions_file)
         print(f"✓ Loaded {len(dimensions_to_merge)} dimensions to merge")
     
+    # Resolve feedback from inline or file
+    feedback = resolve_text_from_args(
+        getattr(args, 'feedback', None),
+        getattr(args, 'feedback_file', None),
+        'feedback'
+    )
+    
     # Refine rubric
-    feedback_msg = f" with feedback" if args.feedback else ""
+    feedback_msg = f" with feedback" if feedback else ""
     context_msg = f" using {input_type} context" if input_type else ""
     dims_msg = f" (merging {len(dimensions_to_merge)} dimensions)" if dimensions_to_merge else ""
-    print(f"\n🔄 Refining rubric{context_msg}{feedback_msg}{dims_msg}...")
-    if args.feedback:
-        print(f"   Feedback: {args.feedback}")
+    # Determine if variables should be used (default is True, --no-variables sets it to False)
+    use_variables = not getattr(args, 'no_variables', False)
+    vars_msg = " (no variables)" if not use_variables else ""
+    
+    print(f"\n🔄 Refining rubric{context_msg}{feedback_msg}{dims_msg}{vars_msg}...")
+    if feedback:
+        feedback_preview = feedback[:60] + "..." if len(feedback) > 60 else feedback
+        source = "(from file)" if getattr(args, 'feedback_file', None) else ""
+        print(f"   Feedback{source}: {feedback_preview}")
+    if not use_variables:
+        print("   Mode: No variables (hard-coded values)")
     print("   This may take a moment...")
     
     if input_type == "qa":
         refined_rubric = generator.refine_rubric_with_qa(
             rubric,
             input_obj,
-            feedback=args.feedback,
-            dimensions_to_merge=dimensions_to_merge
+            feedback=feedback,
+            dimensions_to_merge=dimensions_to_merge,
+            use_variables=use_variables
         )
     elif input_type == "chat":
         refined_rubric = generator.refine_rubric_with_chat(
             rubric,
             input_obj,
-            feedback=args.feedback,
-            dimensions_to_merge=dimensions_to_merge
+            feedback=feedback,
+            dimensions_to_merge=dimensions_to_merge,
+            use_variables=use_variables
         )
     else:
         refined_rubric = generator.refine_rubric(
             rubric,
-            feedback=args.feedback,
-            dimensions_to_merge=dimensions_to_merge
+            feedback=feedback,
+            dimensions_to_merge=dimensions_to_merge,
+            use_variables=use_variables
         )
     
     print(f"✓ Refined rubric: {len(refined_rubric.dimensions)} dimensions, {len(refined_rubric.criteria)} criteria")
     if refined_rubric.variables:
         print(f"   Variables extracted: {len(refined_rubric.variables)}")
+    elif use_variables:
+        print("   Note: No variables extracted from content")
     
     # Determine output path and write
     output_path = args.output_file if args.output_file else args.rubric_file
@@ -1632,6 +1707,25 @@ Examples:
         help='Model name to use for generation (default: gpt-4)'
     )
     
+    generate_parser.add_argument(
+        '--no-variables',
+        action='store_true',
+        dest='no_variables',
+        help='Do not extract variables - use hard-coded values directly in criteria'
+    )
+    
+    # Mutually exclusive group for guidelines
+    guidelines_group = generate_parser.add_mutually_exclusive_group()
+    guidelines_group.add_argument(
+        '--guidelines',
+        help='Specific guidelines or hints to guide rubric generation (e.g., "Focus on security aspects")'
+    )
+    guidelines_group.add_argument(
+        '--guidelines-file',
+        dest='guidelines_file',
+        help='Path to file containing guidelines (for long or multi-line content, e.g., AI persona descriptions)'
+    )
+    
     generate_parser.set_defaults(func=cmd_generate)
     
     # ========== REFINE subcommand ==========
@@ -1687,9 +1781,16 @@ Examples:
         help='Output path for refined rubric (default: overwrite original)'
     )
     
-    refine_parser.add_argument(
+    # Mutually exclusive group for feedback
+    feedback_group = refine_parser.add_mutually_exclusive_group()
+    feedback_group.add_argument(
         '--feedback',
         help='Specific feedback for refinement (optional)'
+    )
+    feedback_group.add_argument(
+        '--feedback-file',
+        dest='feedback_file',
+        help='Path to file containing feedback (for long or multi-line content, e.g., AI persona descriptions)'
     )
     
     refine_parser.add_argument(
@@ -1711,6 +1812,13 @@ Examples:
         '--model',
         default='gpt-4',
         help='Model name to use for refinement (default: gpt-4)'
+    )
+    
+    refine_parser.add_argument(
+        '--no-variables',
+        action='store_true',
+        dest='no_variables',
+        help='Do not extract variables - use hard-coded values directly in criteria'
     )
     
     refine_parser.set_defaults(func=cmd_refine)

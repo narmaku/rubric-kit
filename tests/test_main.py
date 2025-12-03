@@ -483,6 +483,203 @@ dimensions:
     os.unlink(temp_path)
 
 
+class TestGenerateWithGuidelines:
+    """Test generate command with --guidelines option."""
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_with_guidelines(self, mock_generator_class, sample_qa_file):
+        """Test generate command passes guidelines to generator."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(
+                    name="factual_correctness",
+                    description="Test correctness",
+                    grading_type="binary"
+                )
+            ],
+            criteria=[
+                Criterion(
+                    name="fact_1",
+                    category="Output",
+                    weight=3,
+                    dimension="factual_correctness",
+                    criterion="Check fact 1"
+                )
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        guidelines = "Focus on security aspects. Create atomic criteria."
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-qna', sample_qa_file,
+                '--output-file', output_path,
+                '--guidelines', guidelines
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify generator was called with guidelines
+            call_args = mock_generator.generate_rubric.call_args
+            assert call_args[1]['guidelines'] == guidelines
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_from_chat_with_guidelines(self, mock_generator_class, sample_chat_session_file):
+        """Test generate from chat command passes guidelines to generator."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(
+                    name="tool_usage",
+                    description="Tool usage",
+                    grading_type="binary"
+                )
+            ],
+            criteria=[
+                Criterion(
+                    name="tool_1",
+                    category="Tools",
+                    weight=3,
+                    dimension="tool_usage",
+                    criterion="Check tool"
+                )
+            ]
+        )
+        mock_generator.generate_rubric_from_chat.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        guidelines = "Create granular tool usage criteria."
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-chat-session', sample_chat_session_file,
+                '--output-file', output_path,
+                '--guidelines', guidelines
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify generator was called with guidelines
+            call_args = mock_generator.generate_rubric_from_chat.call_args
+            assert call_args[1]['guidelines'] == guidelines
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_with_guidelines_file(self, mock_generator_class, sample_qa_file):
+        """Test generate command reads guidelines from file."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        # Create guidelines file with multi-line content
+        guidelines_content = """# AI Assistant Persona
+The assistant being evaluated is a helpful coding assistant.
+It should:
+- Provide accurate code suggestions
+- Follow best practices
+- Explain reasoning clearly
+
+Focus on evaluating these specific behaviors."""
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(guidelines_content)
+            guidelines_file = f.name
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-qna', sample_qa_file,
+                '--output-file', output_path,
+                '--guidelines-file', guidelines_file
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify generator was called with guidelines content from file
+            call_args = mock_generator.generate_rubric.call_args
+            assert call_args[1]['guidelines'] == guidelines_content
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+            if os.path.exists(guidelines_file):
+                os.unlink(guidelines_file)
+    
+    def test_generate_guidelines_and_guidelines_file_mutually_exclusive(self, sample_qa_file):
+        """Test that --guidelines and --guidelines-file cannot be used together."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("Some guidelines")
+            guidelines_file = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'generate',
+                '--from-qna', sample_qa_file,
+                '--output-file', 'output.yaml',
+                '--guidelines', 'inline guidelines',
+                '--guidelines-file', guidelines_file
+            ]
+            
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            
+            # Should exit with error due to mutually exclusive arguments
+            assert exc_info.value.code != 0
+        finally:
+            if os.path.exists(guidelines_file):
+                os.unlink(guidelines_file)
+
+
 class TestGenerateWithDimensionsFile:
     """Test generate command with --dimensions-file."""
     
@@ -709,6 +906,86 @@ class TestRefineCommand:
         # Verify feedback was passed
         call_args = mock_generator.refine_rubric.call_args
         assert call_args[1]['feedback'] == feedback
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_with_feedback_file(self, mock_generator_class, sample_rubric_file):
+        """Test refine command reads feedback from file."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric.return_value = mock_rubric
+        
+        # Create feedback file with multi-line content
+        feedback_content = """# Refinement Instructions
+The AI assistant being evaluated has the following persona:
+- Expert Linux system administrator
+- Should use diagnostic tools properly
+- Must provide accurate system information
+
+Please refine the rubric to:
+1. Add criteria for tool usage order
+2. Make factual checks more granular
+3. Ensure each criterion checks exactly one fact"""
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(feedback_content)
+            feedback_file = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'refine',
+                '--rubric-file', sample_rubric_file,
+                '--feedback-file', feedback_file
+            ]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify feedback content from file was passed
+            call_args = mock_generator.refine_rubric.call_args
+            assert call_args[1]['feedback'] == feedback_content
+        finally:
+            if os.path.exists(feedback_file):
+                os.unlink(feedback_file)
+    
+    def test_refine_feedback_and_feedback_file_mutually_exclusive(self, sample_rubric_file):
+        """Test that --feedback and --feedback-file cannot be used together."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("Some feedback")
+            feedback_file = f.name
+        
+        try:
+            sys.argv = [
+                'rubric-kit', 'refine',
+                '--rubric-file', sample_rubric_file,
+                '--feedback', 'inline feedback',
+                '--feedback-file', feedback_file
+            ]
+            
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            
+            # Should exit with error due to mutually exclusive arguments
+            assert exc_info.value.code != 0
+        finally:
+            if os.path.exists(feedback_file):
+                os.unlink(feedback_file)
     
     @patch('rubric_kit.main.RubricGenerator')
     @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
