@@ -1074,6 +1074,199 @@ class TestNormalizeToolSpec:
         assert spec == original_spec
 
 
+class TestGenerateRubricWithGuidelines:
+    """Test rubric generation with guidelines parameter."""
+    
+    @pytest.fixture
+    def generator(self):
+        """Create a RubricGenerator instance."""
+        return RubricGenerator(api_key="test-key", model="gpt-4")
+    
+    @pytest.fixture
+    def simple_qa(self):
+        """Simple Q&A input for testing."""
+        return QAInput(
+            question="What is the capital of France?",
+            answer="The capital of France is Paris.",
+            context=None
+        )
+    
+    @pytest.fixture
+    def chat_session_input(self):
+        """Sample chat session input for testing."""
+        return ChatSessionInput(
+            content="""### User:
+can you give me a summary of my system?
+
+### Assistant:
+#### Tool Call: get_system_information
+
+### Assistant:
+The system is running Fedora Linux 42 with 8 CPUs."""
+        )
+    
+    def test_generate_rubric_passes_guidelines(self, generator, simple_qa, monkeypatch):
+        """Test that generate_rubric passes guidelines to generation methods."""
+        mock_dimensions = [
+            {
+                "name": "factual_correctness",
+                "description": "Evaluates factual accuracy",
+                "grading_type": "binary"
+            }
+        ]
+        
+        mock_criteria = [
+            {
+                "name": "capital_fact",
+                "category": "Accuracy",
+                "weight": 3,
+                "dimension": "factual_correctness",
+                "criterion": "The answer correctly identifies Paris as the capital."
+            }
+        ]
+        
+        call_count = [0]
+        prompts_received = []
+        
+        def mock_llm_call(prompt, *args, **kwargs):
+            call_count[0] += 1
+            prompts_received.append(prompt)
+            if call_count[0] == 1:
+                return mock_dimensions
+            else:
+                return mock_criteria
+        
+        monkeypatch.setattr(generator, "_call_llm", mock_llm_call)
+        
+        guidelines = "Focus on geographical accuracy. Check for specific city names."
+        rubric = generator.generate_rubric(
+            simple_qa,
+            num_dimensions=1,
+            num_criteria=1,
+            guidelines=guidelines
+        )
+        
+        # Guidelines should appear in both prompts (dimensions and criteria)
+        assert len(prompts_received) == 2
+        assert guidelines in prompts_received[0]  # Dimension generation prompt
+        assert guidelines in prompts_received[1]  # Criteria generation prompt
+    
+    def test_generate_rubric_from_chat_passes_guidelines(
+        self, generator, chat_session_input, monkeypatch
+    ):
+        """Test that generate_rubric_from_chat passes guidelines to generation methods."""
+        mock_dimensions = [
+            {
+                "name": "tool_usage",
+                "description": "Evaluates tool usage",
+                "grading_type": "binary"
+            }
+        ]
+        
+        mock_criteria = [
+            {
+                "name": "tool_called",
+                "category": "Tools",
+                "weight": 3,
+                "dimension": "tool_usage",
+                "criterion": "Tool was called correctly."
+            }
+        ]
+        
+        call_count = [0]
+        prompts_received = []
+        
+        def mock_llm_call(prompt, *args, **kwargs):
+            call_count[0] += 1
+            prompts_received.append(prompt)
+            if call_count[0] == 1:
+                return mock_dimensions
+            else:
+                return mock_criteria
+        
+        monkeypatch.setattr(generator, "_call_llm", mock_llm_call)
+        
+        guidelines = "Evaluate tool usage patterns. Create atomic criteria."
+        rubric = generator.generate_rubric_from_chat(
+            chat_session_input,
+            num_dimensions=1,
+            num_criteria=1,
+            guidelines=guidelines
+        )
+        
+        # Guidelines should appear in both prompts
+        assert len(prompts_received) == 2
+        assert guidelines in prompts_received[0]  # Dimension generation prompt
+        assert guidelines in prompts_received[1]  # Criteria generation prompt
+    
+    def test_generate_dimensions_passes_guidelines(self, generator, simple_qa, monkeypatch):
+        """Test that generate_dimensions includes guidelines in prompt."""
+        mock_response = [
+            {
+                "name": "factual_correctness",
+                "description": "Evaluates factual accuracy",
+                "grading_type": "binary"
+            }
+        ]
+        
+        prompt_received = []
+        
+        def mock_llm_call(prompt, *args, **kwargs):
+            prompt_received.append(prompt)
+            return mock_response
+        
+        monkeypatch.setattr(generator, "_call_llm", mock_llm_call)
+        
+        guidelines = "Create dimensions for accuracy and completeness."
+        dimensions = generator.generate_dimensions(
+            simple_qa,
+            num_dimensions=1,
+            guidelines=guidelines
+        )
+        
+        assert len(prompt_received) == 1
+        assert guidelines in prompt_received[0]
+    
+    def test_generate_criteria_passes_guidelines(self, generator, simple_qa, monkeypatch):
+        """Test that generate_criteria includes guidelines in prompt."""
+        dimensions = [
+            Dimension(
+                name="factual_correctness",
+                description="Evaluates factual accuracy",
+                grading_type="binary"
+            )
+        ]
+        
+        mock_response = [
+            {
+                "name": "capital_fact",
+                "category": "Accuracy",
+                "weight": 3,
+                "dimension": "factual_correctness",
+                "criterion": "Check the capital city."
+            }
+        ]
+        
+        prompt_received = []
+        
+        def mock_llm_call(prompt, *args, **kwargs):
+            prompt_received.append(prompt)
+            return mock_response
+        
+        monkeypatch.setattr(generator, "_call_llm", mock_llm_call)
+        
+        guidelines = "Each criterion should check exactly one fact."
+        criteria, _ = generator.generate_criteria(
+            simple_qa,
+            dimensions,
+            num_criteria=1,
+            guidelines=guidelines
+        )
+        
+        assert len(prompt_received) == 1
+        assert guidelines in prompt_received[0]
+
+
 class TestParseDimensionsFile:
     """Test parsing dimensions from YAML file."""
     
