@@ -1,6 +1,6 @@
 # Rubric Kit
 
-LLM-as-a-Judge evaluation framework. Create, refine, and apply evaluation rubrics powered by AI.
+Rubric framework. Create, refine, and apply evaluation rubrics powered by AI.
 
 ## Features
 
