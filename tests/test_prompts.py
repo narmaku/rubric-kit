@@ -704,3 +704,279 @@ def test_params_mixed_validation_modes():
     assert "key" in prompt
     assert "value" in prompt
 
+
+# =============================================================================
+# Variable Placeholder Tests - Regression for brace doubling bug
+# =============================================================================
+
+def test_refine_prompt_variable_placeholders_use_double_braces():
+    """Test that refine prompts show {{var}} syntax, not {{{{var}}}} to the LLM.
+    
+    This is a regression test for a bug where the LLM was being told to use
+    quadruple braces {{{{var}}}} in the guidance, causing it to output
+    {{{{var}}}} instead of the correct {{var}} in refined rubrics.
+    """
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    criteria = [
+        Criterion(
+            name="test_crit",
+            category="Test",
+            weight=1,
+            dimension="accuracy",
+            criterion="Check {{test_var}}"
+        )
+    ]
+    
+    prompt = build_refine_rubric_prompt(dimensions, criteria)
+    
+    # The guidance should tell the LLM to use double braces {{var}}, 
+    # NOT quadruple braces {{{{var}}}}
+    # If we find quadruple braces in the guidance text, the bug exists
+    assert "{{{{" not in prompt, (
+        "Bug: Prompt contains quadruple braces {{{{...}}}} which will cause "
+        "the LLM to output doubled braces in refined rubrics. "
+        "Variable placeholders should show as {{var}} not {{{{var}}}}."
+    )
+    
+    # The prompt should contain proper double-brace examples
+    assert "{{variable_name}}" in prompt or "{{" in prompt
+
+
+def test_criteria_generation_prompt_variable_placeholders_use_double_braces():
+    """Test that criteria generation prompts show {{var}} syntax to the LLM."""
+    from rubric_kit.prompts import build_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    prompt = build_criteria_generation_prompt(
+        question="What is 2+2?",
+        answer="4",
+        dimensions=dimensions,
+        num_criteria=3
+    )
+    
+    # Should NOT contain quadruple braces in guidance
+    assert "{{{{" not in prompt, (
+        "Bug: Criteria generation prompt contains quadruple braces"
+    )
+
+
+def test_chat_criteria_generation_prompt_variable_placeholders_use_double_braces():
+    """Test that chat criteria generation prompts show {{var}} syntax to the LLM."""
+    from rubric_kit.prompts import build_chat_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    prompt = build_chat_criteria_generation_prompt(
+        chat_content="User: Hello\nAssistant: Hi",
+        dimensions=dimensions,
+        num_criteria=3
+    )
+    
+    # Should NOT contain quadruple braces in guidance
+    assert "{{{{" not in prompt, (
+        "Bug: Chat criteria generation prompt contains quadruple braces"
+    )
+
+
+# =============================================================================
+# No-Variables Mode Tests
+# =============================================================================
+
+def test_refine_prompt_with_use_variables_true_includes_variables_guidance():
+    """Test that refine prompt includes variables guidance by default."""
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    criteria = [
+        Criterion(
+            name="test_crit",
+            category="Test",
+            weight=1,
+            dimension="accuracy",
+            criterion="Test criterion"
+        )
+    ]
+    
+    prompt = build_refine_rubric_prompt(dimensions, criteria, use_variables=True)
+    
+    # Should include variables guidance
+    assert "variables" in prompt.lower()
+    assert "{{variable_name}}" in prompt or "{{" in prompt
+
+
+def test_refine_prompt_with_use_variables_false_excludes_variables_guidance():
+    """Test that refine prompt excludes variables guidance when use_variables=False."""
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    criteria = [
+        Criterion(
+            name="test_crit",
+            category="Test",
+            weight=1,
+            dimension="accuracy",
+            criterion="Test criterion"
+        )
+    ]
+    
+    prompt = build_refine_rubric_prompt(dimensions, criteria, use_variables=False)
+    
+    # Should NOT include variables guidance or placeholder syntax examples
+    assert "{{variable_name}}" not in prompt
+    # Should instruct to use hardcoded values
+    assert "hardcoded" in prompt.lower() or "hardcode" in prompt.lower() or "hard-coded" in prompt.lower()
+
+
+def test_criteria_generation_prompt_with_use_variables_false():
+    """Test that criteria generation prompt excludes variables when use_variables=False."""
+    from rubric_kit.prompts import build_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    prompt = build_criteria_generation_prompt(
+        question="What is 2+2?",
+        answer="4",
+        dimensions=dimensions,
+        num_criteria=3,
+        use_variables=False
+    )
+    
+    # Should NOT include variables guidance
+    assert "{{variable_name}}" not in prompt
+    # Should instruct to use hardcoded values
+    assert "hardcoded" in prompt.lower() or "hardcode" in prompt.lower() or "hard-coded" in prompt.lower()
+
+
+def test_chat_criteria_generation_prompt_with_use_variables_false():
+    """Test that chat criteria generation prompt excludes variables when use_variables=False."""
+    from rubric_kit.prompts import build_chat_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    
+    prompt = build_chat_criteria_generation_prompt(
+        chat_content="User: Hello\nAssistant: Hi",
+        dimensions=dimensions,
+        num_criteria=3,
+        use_variables=False
+    )
+    
+    # Should NOT include variables guidance
+    assert "{{variable_name}}" not in prompt
+    # Should instruct to use hardcoded values
+    assert "hardcoded" in prompt.lower() or "hardcode" in prompt.lower() or "hard-coded" in prompt.lower()
+
+
+# =============================================================================
+# Guidelines Parameter Tests
+# =============================================================================
+
+def test_build_dimension_generation_prompt_with_guidelines():
+    """Test that dimension generation prompt includes guidelines when provided."""
+    question = "What is the capital of France?"
+    answer = "Paris"
+    guidelines = "Focus on factual accuracy and completeness. Avoid subjective criteria."
+    
+    prompt = build_dimension_generation_prompt(
+        question=question,
+        answer=answer,
+        num_dimensions=3,
+        guidelines=guidelines
+    )
+    
+    # Guidelines should appear in the prompt
+    assert guidelines in prompt
+    assert "Focus on factual accuracy" in prompt
+    assert "Avoid subjective criteria" in prompt
+
+
+def test_build_dimension_generation_prompt_without_guidelines():
+    """Test that dimension generation prompt works without guidelines."""
+    question = "What is the capital of France?"
+    answer = "Paris"
+    
+    prompt = build_dimension_generation_prompt(
+        question=question,
+        answer=answer,
+        num_dimensions=3
+    )
+    
+    # Prompt should still be valid without guidelines
+    assert question in prompt
+    assert answer in prompt
+    assert "dimension" in prompt.lower()
+
+
+def test_build_criteria_generation_prompt_with_guidelines():
+    """Test that criteria generation prompt includes guidelines when provided."""
+    from rubric_kit.prompts import build_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    guidelines = "Create criteria that check specific numerical values. Each criterion should be atomic."
+    
+    prompt = build_criteria_generation_prompt(
+        question="What is 2+2?",
+        answer="4",
+        dimensions=dimensions,
+        num_criteria=3,
+        guidelines=guidelines
+    )
+    
+    # Guidelines should appear in the prompt
+    assert guidelines in prompt
+    assert "specific numerical values" in prompt
+
+
+def test_build_chat_dimension_generation_prompt_with_guidelines():
+    """Test that chat dimension generation prompt includes guidelines when provided."""
+    from rubric_kit.prompts import build_chat_dimension_generation_prompt
+    
+    chat_content = "User: Hello\nAssistant: Hi there!"
+    guidelines = "Include a dimension for tool usage evaluation. Focus on response quality."
+    
+    prompt = build_chat_dimension_generation_prompt(
+        chat_content=chat_content,
+        num_dimensions=3,
+        guidelines=guidelines
+    )
+    
+    # Guidelines should appear in the prompt
+    assert guidelines in prompt
+    assert "tool usage evaluation" in prompt
+
+
+def test_build_chat_criteria_generation_prompt_with_guidelines():
+    """Test that chat criteria generation prompt includes guidelines when provided."""
+    from rubric_kit.prompts import build_chat_criteria_generation_prompt
+    
+    dimensions = [
+        Dimension(name="accuracy", description="Test", grading_type="binary")
+    ]
+    guidelines = "Create granular criteria for each fact. Avoid combining multiple checks."
+    
+    prompt = build_chat_criteria_generation_prompt(
+        chat_content="User: Hello\nAssistant: Hi",
+        dimensions=dimensions,
+        num_criteria=3,
+        guidelines=guidelines
+    )
+    
+    # Guidelines should appear in the prompt
+    assert guidelines in prompt
+    assert "granular criteria" in prompt
+

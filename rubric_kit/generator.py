@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from openai import OpenAI
+import litellm
 
 from rubric_kit.schema import Rubric, Dimension, Criterion
 from rubric_kit.prompts import (
@@ -492,26 +492,38 @@ def _merge_dimensions(
 
 
 class RubricGenerator:
-    """Generate rubrics from Q&A pairs using LLM."""
+    """Generate rubrics from Q&A pairs using LLM.
     
-    def __init__(self, api_key: str, model: str = "gpt-4", base_url: Optional[str] = None):
+    Supports multiple LLM providers via LiteLLM:
+    - OpenAI: model="gpt-4" or "gpt-4o"
+    - Google Vertex AI: model="vertex_ai/gemini-2.5-flash"
+    - IBM WatsonX: model="watsonx/meta-llama/llama-3-8b-instruct"
+    - Anthropic: model="claude-3-5-sonnet-20241022"
+    - Local Ollama: model="ollama/llama3"
+    """
+    
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4", base_url: Optional[str] = None):
         """
         Initialize RubricGenerator.
         
         Args:
-            api_key: OpenAI API key
-            model: Model name to use
-            base_url: Optional base URL for OpenAI-compatible endpoint
+            api_key: Optional API key. If not provided, LiteLLM will auto-detect
+                    from environment variables based on the model/provider.
+            model: Model name to use. Use LiteLLM format for non-OpenAI providers:
+                   - "gpt-4" for OpenAI
+                   - "vertex_ai/gemini-2.5-flash" for Google Vertex AI
+                   - "watsonx/meta-llama/llama-3-8b-instruct" for IBM WatsonX
+            base_url: Optional base URL for OpenAI-compatible endpoints
         """
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
     
     def generate_dimensions(
         self,
         qa_input: QAInput,
-        num_dimensions: Optional[int] = None
+        num_dimensions: Optional[int] = None,
+        guidelines: Optional[str] = None
     ) -> List[Dimension]:
         """
         Generate evaluation dimensions from Q&A pair.
@@ -519,6 +531,7 @@ class RubricGenerator:
         Args:
             qa_input: Question and answer input
             num_dimensions: Number of dimensions to generate (1-10), or None for auto
+            guidelines: Optional specific guidelines/hints to guide dimension generation
             
         Returns:
             List of Dimension objects
@@ -527,7 +540,8 @@ class RubricGenerator:
             question=qa_input.question,
             answer=qa_input.answer,
             num_dimensions=num_dimensions,
-            context=qa_input.context
+            context=qa_input.context,
+            guidelines=guidelines
         )
         response = self._call_llm(prompt)
         return _convert_to_dimensions(response)
@@ -537,7 +551,9 @@ class RubricGenerator:
         qa_input: QAInput,
         dimensions: List[Dimension],
         num_criteria: Optional[int] = None,
-        category_hints: Optional[List[str]] = None
+        category_hints: Optional[List[str]] = None,
+        use_variables: bool = True,
+        guidelines: Optional[str] = None
     ) -> tuple[List[Criterion], Optional[Dict[str, str]]]:
         """
         Generate evaluation criteria for dimensions.
@@ -547,6 +563,8 @@ class RubricGenerator:
             dimensions: List of dimensions to create criteria for
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+            guidelines: Optional specific guidelines/hints to guide criteria generation
             
         Returns:
             Tuple of (List of Criterion objects, Optional variables dict)
@@ -557,13 +575,15 @@ class RubricGenerator:
             dimensions=dimensions,
             num_criteria=num_criteria,
             category_hints=category_hints,
-            context=qa_input.context
+            context=qa_input.context,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
         response = self._call_llm(prompt, categories=category_hints)
         
         # Handle new format with variables
         if isinstance(response, dict) and "criteria" in response:
-            variables = response.get("variables")
+            variables = response.get("variables") if use_variables else None
             criteria = _convert_to_criteria(response["criteria"])
             return criteria, variables
         
@@ -576,7 +596,9 @@ class RubricGenerator:
         num_dimensions: Optional[int] = None,
         num_criteria: Optional[int] = None,
         category_hints: Optional[List[str]] = None,
-        dimensions: Optional[List[Dimension]] = None
+        dimensions: Optional[List[Dimension]] = None,
+        use_variables: bool = True,
+        guidelines: Optional[str] = None
     ) -> Rubric:
         """
         Generate a complete rubric from Q&A pair.
@@ -587,6 +609,8 @@ class RubricGenerator:
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
             dimensions: Optional pre-defined dimensions (skips dimension generation)
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+            guidelines: Optional specific guidelines/hints to guide rubric generation
             
         Returns:
             Validated Rubric object with variables extracted from the content
@@ -600,13 +624,15 @@ class RubricGenerator:
         if dimensions is not None:
             dims = dimensions
         else:
-            dims = self.generate_dimensions(qa_input, num_dimensions)
+            dims = self.generate_dimensions(qa_input, num_dimensions, guidelines=guidelines)
         
         criteria, variables = self.generate_criteria(
             qa_input,
             dims,
             num_criteria,
-            category_hints
+            category_hints,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
         
         return Rubric(dimensions=dims, criteria=criteria, variables=variables)
@@ -615,7 +641,8 @@ class RubricGenerator:
         self,
         rubric: Rubric,
         feedback: Optional[str] = None,
-        dimensions_to_merge: Optional[List[Dimension]] = None
+        dimensions_to_merge: Optional[List[Dimension]] = None,
+        use_variables: bool = True
     ) -> Rubric:
         """
         Refine an existing rubric with optional feedback.
@@ -624,6 +651,7 @@ class RubricGenerator:
             rubric: Existing rubric to refine
             feedback: Optional specific feedback for refinement
             dimensions_to_merge: Optional dimensions to merge with existing
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
             
         Returns:
             Refined Rubric object with variables
@@ -635,13 +663,14 @@ class RubricGenerator:
             dimensions=merged_dims,
             criteria=rubric.criteria,
             feedback=feedback,
-            variables=rubric.variables
+            variables=rubric.variables if use_variables else None,
+            use_variables=use_variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
-        variables = response.get("variables")
+        variables = response.get("variables") if use_variables else None
         
         return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
@@ -650,7 +679,8 @@ class RubricGenerator:
         rubric: Rubric,
         qa_input: QAInput,
         feedback: Optional[str] = None,
-        dimensions_to_merge: Optional[List[Dimension]] = None
+        dimensions_to_merge: Optional[List[Dimension]] = None,
+        use_variables: bool = True
     ) -> Rubric:
         """
         Refine an existing rubric using Q&A context.
@@ -660,6 +690,7 @@ class RubricGenerator:
             qa_input: Q&A input to use as context for refinement
             feedback: Optional specific feedback for refinement
             dimensions_to_merge: Optional dimensions to merge with existing
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
             
         Returns:
             Refined Rubric object with variables
@@ -674,13 +705,14 @@ class RubricGenerator:
             answer=qa_input.answer,
             feedback=feedback,
             context=qa_input.context,
-            variables=rubric.variables
+            variables=rubric.variables if use_variables else None,
+            use_variables=use_variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
-        variables = response.get("variables")
+        variables = response.get("variables") if use_variables else None
         
         return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
@@ -689,7 +721,8 @@ class RubricGenerator:
         rubric: Rubric,
         chat_input: ChatSessionInput,
         feedback: Optional[str] = None,
-        dimensions_to_merge: Optional[List[Dimension]] = None
+        dimensions_to_merge: Optional[List[Dimension]] = None,
+        use_variables: bool = True
     ) -> Rubric:
         """
         Refine an existing rubric using chat session context.
@@ -699,6 +732,7 @@ class RubricGenerator:
             chat_input: Chat session input to use as context for refinement
             feedback: Optional specific feedback for refinement
             dimensions_to_merge: Optional dimensions to merge with existing
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
             
         Returns:
             Refined Rubric object with variables
@@ -712,20 +746,22 @@ class RubricGenerator:
             chat_content=chat_input.content,
             feedback=feedback,
             context=chat_input.context,
-            variables=rubric.variables
+            variables=rubric.variables if use_variables else None,
+            use_variables=use_variables
         )
         response = self._call_llm(prompt)
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
-        variables = response.get("variables")
+        variables = response.get("variables") if use_variables else None
         
         return Rubric(dimensions=dimensions, criteria=criteria, variables=variables)
     
     def generate_dimensions_from_chat(
         self,
         chat_input: ChatSessionInput,
-        num_dimensions: Optional[int] = None
+        num_dimensions: Optional[int] = None,
+        guidelines: Optional[str] = None
     ) -> List[Dimension]:
         """
         Generate evaluation dimensions from chat session.
@@ -736,6 +772,7 @@ class RubricGenerator:
         Args:
             chat_input: Chat session input
             num_dimensions: Number of dimensions to generate (1-10), or None for auto
+            guidelines: Optional specific guidelines/hints to guide dimension generation
             
         Returns:
             List of Dimension objects
@@ -743,7 +780,8 @@ class RubricGenerator:
         prompt = build_chat_dimension_generation_prompt(
             chat_content=chat_input.content,
             num_dimensions=num_dimensions,
-            context=chat_input.context
+            context=chat_input.context,
+            guidelines=guidelines
         )
         response = self._call_llm(prompt)
         return _convert_to_dimensions(response)
@@ -753,7 +791,9 @@ class RubricGenerator:
         chat_input: ChatSessionInput,
         dimensions: List[Dimension],
         num_criteria: Optional[int] = None,
-        category_hints: Optional[List[str]] = None
+        category_hints: Optional[List[str]] = None,
+        use_variables: bool = True,
+        guidelines: Optional[str] = None
     ) -> tuple[List[Criterion], Optional[Dict[str, str]]]:
         """
         Generate evaluation criteria for dimensions from chat session.
@@ -766,6 +806,8 @@ class RubricGenerator:
             dimensions: List of dimensions to create criteria for
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+            guidelines: Optional specific guidelines/hints to guide criteria generation
             
         Returns:
             Tuple of (List of Criterion objects, Optional variables dict)
@@ -775,13 +817,15 @@ class RubricGenerator:
             dimensions=dimensions,
             num_criteria=num_criteria,
             category_hints=category_hints,
-            context=chat_input.context
+            context=chat_input.context,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
         response = self._call_llm(prompt, categories=category_hints)
         
         # Handle new format with variables
         if isinstance(response, dict) and "criteria" in response:
-            variables = response.get("variables")
+            variables = response.get("variables") if use_variables else None
             criteria = _convert_to_criteria(response["criteria"])
             return criteria, variables
         
@@ -794,7 +838,9 @@ class RubricGenerator:
         num_dimensions: Optional[int] = None,
         num_criteria: Optional[int] = None,
         category_hints: Optional[List[str]] = None,
-        dimensions: Optional[List[Dimension]] = None
+        dimensions: Optional[List[Dimension]] = None,
+        use_variables: bool = True,
+        guidelines: Optional[str] = None
     ) -> Rubric:
         """
         Generate a complete rubric from chat session.
@@ -808,6 +854,8 @@ class RubricGenerator:
             num_criteria: Number of criteria to generate (1-10), or None for auto
             category_hints: Optional list of category names to guide generation
             dimensions: Optional pre-defined dimensions (skips dimension generation)
+            use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
+            guidelines: Optional specific guidelines/hints to guide rubric generation
             
         Returns:
             Validated Rubric object with variables extracted from the content
@@ -821,20 +869,22 @@ class RubricGenerator:
         if dimensions is not None:
             dims = dimensions
         else:
-            dims = self.generate_dimensions_from_chat(chat_input, num_dimensions)
+            dims = self.generate_dimensions_from_chat(chat_input, num_dimensions, guidelines=guidelines)
         
         criteria, variables = self.generate_criteria_from_chat(
             chat_input,
             dims,
             num_criteria,
-            category_hints
+            category_hints,
+            use_variables=use_variables,
+            guidelines=guidelines
         )
         
         return Rubric(dimensions=dims, criteria=criteria, variables=variables)
     
     def _call_llm(self, prompt: str, **kwargs) -> Any:
         """
-        Call LLM and parse JSON response.
+        Call LLM via LiteLLM and parse JSON response.
         
         Args:
             prompt: Prompt to send to LLM
@@ -846,9 +896,9 @@ class RubricGenerator:
         Raises:
             ValueError: If response is not valid JSON or was truncated
         """
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+        api_params = {
+            "model": self.model,
+            "messages": [
                 {
                     "role": "system",
                     "content": GENERATOR_CONFIG.system_prompt
@@ -858,9 +908,19 @@ class RubricGenerator:
                     "content": prompt
                 }
             ],
-            temperature=GENERATOR_CONFIG.temperature,
-            max_tokens=GENERATOR_CONFIG.max_tokens
-        )
+            "temperature": GENERATOR_CONFIG.temperature,
+            "max_tokens": GENERATOR_CONFIG.max_tokens
+        }
+        
+        # Add explicit API key if provided
+        if self.api_key:
+            api_params["api_key"] = self.api_key
+        
+        # Add custom base URL if provided (for OpenAI-compatible endpoints)
+        if self.base_url:
+            api_params["api_base"] = self.base_url
+        
+        response = litellm.completion(**api_params)
         
         # Check if response was truncated
         finish_reason = response.choices[0].finish_reason

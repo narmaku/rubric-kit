@@ -6,7 +6,7 @@ import os
 import random
 from typing import Dict, Any, Optional, Tuple, List
 from pathlib import Path
-from openai import OpenAI
+import litellm
 
 from rubric_kit.schema import Rubric, Criterion, Dimension, JudgePanelConfig, JudgeConfig
 from rubric_kit.prompts import (
@@ -119,28 +119,21 @@ def parse_score_response(response: str) -> Dict[str, Any]:
     }
 
 
-def _get_api_key(judge_config: JudgeConfig) -> str:
-    """Get API key from judge config or environment."""
-    if judge_config.api_key:
-        return judge_config.api_key
+def _get_api_key(judge_config: JudgeConfig) -> Optional[str]:
+    """Get API key from judge config.
     
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "API key is required. Set OPENAI_API_KEY environment variable or provide in judge config."
-        )
+    Returns the API key if explicitly provided in judge config.
+    If not provided, returns None and LiteLLM will auto-detect
+    from environment variables based on the provider/model.
     
-    return api_key
-
-
-def _create_openai_client(judge_config: JudgeConfig) -> OpenAI:
-    """Create and configure OpenAI client."""
-    client_kwargs = {"api_key": _get_api_key(judge_config)}
-    
-    if judge_config.base_url:
-        client_kwargs["base_url"] = judge_config.base_url
-    
-    return OpenAI(**client_kwargs)
+    For explicit control, users can set the appropriate env var:
+    - OPENAI_API_KEY for OpenAI models
+    - GEMINI_API_KEY for Google Gemini/Vertex AI
+    - WATSONX_APIKEY for IBM WatsonX
+    - ANTHROPIC_API_KEY for Anthropic Claude
+    - etc. (see LiteLLM docs for full list)
+    """
+    return judge_config.api_key
 
 
 def _prepare_tool_call_evaluation(
@@ -192,8 +185,7 @@ def _evaluate_tool_calls_hybrid(
     param_prompt = build_param_validation_prompt(breakdown)
     if param_prompt:
         try:
-            client = _create_openai_client(judge_config)
-            response = _call_llm(client, judge_config, param_prompt, EVALUATOR_CONFIG)
+            response = _call_llm(judge_config, param_prompt, EVALUATOR_CONFIG)
             validation_results = parse_param_validation_response(response)
             apply_param_validation_results(breakdown, validation_results)
         except Exception as e:
@@ -203,8 +195,7 @@ def _evaluate_tool_calls_hybrid(
     # Step 3: LLM summary generation
     summary_prompt = build_summary_prompt(breakdown)
     try:
-        client = _create_openai_client(judge_config)
-        response = _call_llm(client, judge_config, summary_prompt, EVALUATOR_CONFIG)
+        response = _call_llm(judge_config, summary_prompt, EVALUATOR_CONFIG)
         breakdown.summary = parse_summary_response(response)
     except Exception as e:
         print(f"Warning: Summary generation failed: {e}")
@@ -269,15 +260,20 @@ def _prepare_evaluation_prompt(
 
 
 def _call_llm(
-    client: OpenAI,
     judge_config: JudgeConfig,
     prompt: str,
     config: Any
 ) -> str:
-    """Call LLM API and return response content.
+    """Call LLM API via LiteLLM and return response content.
     
     Uses judge-specific LLM parameters if provided, otherwise falls back to
     defaults from the config object (from prompts.py).
+    
+    LiteLLM automatically routes to the correct provider based on model name:
+    - "gpt-4" -> OpenAI
+    - "vertex_ai/gemini-2.5-flash" -> Google Vertex AI
+    - "watsonx/meta-llama/llama-3-8b-instruct" -> IBM WatsonX
+    - "ollama/llama3" -> Local Ollama
     """
     # Build API call parameters, using judge-specific values if provided,
     # otherwise falling back to config defaults
@@ -299,8 +295,17 @@ def _call_llm(
     if judge_config.presence_penalty is not None:
         api_params["presence_penalty"] = judge_config.presence_penalty
     
+    # Add explicit API key if provided in judge config
+    api_key = _get_api_key(judge_config)
+    if api_key:
+        api_params["api_key"] = api_key
+    
+    # Add custom base URL if provided (for OpenAI-compatible endpoints)
+    if judge_config.base_url:
+        api_params["api_base"] = judge_config.base_url
+    
     try:
-        response = client.chat.completions.create(**api_params)
+        response = litellm.completion(**api_params)
     except Exception as e:
         raise ValueError(
             f"Judge evaluation failed: API call error for {judge_config.model}: {str(e)}"
@@ -374,11 +379,10 @@ def _single_judge_evaluate(
         )
     
     # Standard LLM-only evaluation for non-tool criteria
-    client = _create_openai_client(judge_config)
     prompt, evaluation_type, config = _prepare_evaluation_prompt(
         criterion, chat_content, dimension, parsed_session
     )
-    llm_response = _call_llm(client, judge_config, prompt, config)
+    llm_response = _call_llm(judge_config, prompt, config)
     return _parse_evaluation_response(llm_response, evaluation_type)
 
 
