@@ -946,6 +946,7 @@ def build_score_criterion_prompt(
 - Dimension: {criterion.dimension}
 - Category: {criterion.category}
 - Description: {dimension.description}
+- Criterion: {criterion.criterion}
 
 **Scoring Scale:**
 {score_descriptions}
