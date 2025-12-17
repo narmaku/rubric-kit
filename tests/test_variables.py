@@ -532,7 +532,7 @@ class TestRubricYAMLOutput:
     
     def test_convert_rubric_to_yaml_dict_includes_variables(self):
         """Test that convert_rubric_to_yaml_dict includes variables section."""
-        from rubric_kit.main import convert_rubric_to_yaml_dict
+        from rubric_kit.converters import rubric_to_dict as convert_rubric_to_yaml_dict
         from rubric_kit.schema import Rubric, Dimension, Criterion
         
         rubric = Rubric(
@@ -560,7 +560,7 @@ class TestRubricYAMLOutput:
     
     def test_convert_rubric_to_yaml_dict_no_variables(self):
         """Test that rubric without variables doesn't have variables section."""
-        from rubric_kit.main import convert_rubric_to_yaml_dict
+        from rubric_kit.converters import rubric_to_dict as convert_rubric_to_yaml_dict
         from rubric_kit.schema import Rubric, Dimension, Criterion
         
         rubric = Rubric(

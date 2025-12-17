@@ -77,7 +77,7 @@ arena:
     
     def test_load_arena_spec_success(self, sample_arena_yaml):
         """Test loading a valid arena spec file."""
-        from rubric_kit.main import load_arena_spec
+        from rubric_kit.arena import load_arena_spec
         
         spec = load_arena_spec(str(sample_arena_yaml))
         
@@ -90,14 +90,14 @@ arena:
     
     def test_load_arena_spec_missing_file(self):
         """Test loading non-existent arena spec file."""
-        from rubric_kit.main import load_arena_spec
+        from rubric_kit.arena import load_arena_spec
         
         with pytest.raises(FileNotFoundError):
             load_arena_spec("nonexistent_arena.yaml")
     
     def test_load_arena_spec_missing_arena_key(self, tmp_path):
         """Test loading arena spec without 'arena' key."""
-        from rubric_kit.main import load_arena_spec
+        from rubric_kit.arena import load_arena_spec
         
         bad_spec = tmp_path / "bad_arena.yaml"
         bad_spec.write_text("rubric_file: test.yaml")
@@ -111,7 +111,7 @@ class TestContestantVariables:
     
     def test_load_inline_variables(self, tmp_path):
         """Test loading inline variables from contestant."""
-        from rubric_kit.main import load_contestant_variables
+        from rubric_kit.arena import load_contestant_variables
         
         contestant = ArenaContestant(
             id="test",
@@ -126,7 +126,7 @@ class TestContestantVariables:
     
     def test_load_external_variables_file(self, tmp_path):
         """Test loading variables from external file."""
-        from rubric_kit.main import load_contestant_variables
+        from rubric_kit.arena import load_contestant_variables
         
         # Create variables file
         vars_file = tmp_path / "vars.yaml"
@@ -145,7 +145,7 @@ class TestContestantVariables:
     
     def test_load_variables_with_nested_key(self, tmp_path):
         """Test loading variables from file with 'variables' key."""
-        from rubric_kit.main import load_contestant_variables
+        from rubric_kit.arena import load_contestant_variables
         
         # Create variables file with nested structure
         vars_file = tmp_path / "vars.yaml"
@@ -164,7 +164,7 @@ class TestContestantVariables:
     
     def test_inline_variables_take_priority(self, tmp_path):
         """Test that inline variables are used even when variables_file is specified."""
-        from rubric_kit.main import load_contestant_variables
+        from rubric_kit.arena import load_contestant_variables
         
         # Create variables file
         vars_file = tmp_path / "vars.yaml"
@@ -185,7 +185,7 @@ class TestContestantVariables:
     
     def test_no_variables_returns_none(self, tmp_path):
         """Test that contestant without variables returns None."""
-        from rubric_kit.main import load_contestant_variables
+        from rubric_kit.arena import load_contestant_variables
         
         contestant = ArenaContestant(
             id="test",
@@ -203,7 +203,7 @@ class TestApplyVariablesToRubric:
     
     def test_apply_variables_substitutes_criterion_text(self):
         """Test that variables are substituted in criterion text."""
-        from rubric_kit.main import apply_variables_to_rubric
+        from rubric_kit.arena import apply_variables_to_rubric
         from rubric_kit.schema import Rubric, Dimension, Criterion
         
         base_rubric = Rubric(
@@ -230,7 +230,7 @@ class TestApplyVariablesToRubric:
     
     def test_apply_variables_substitutes_dimension_description(self):
         """Test that variables are substituted in dimension descriptions."""
-        from rubric_kit.main import apply_variables_to_rubric
+        from rubric_kit.arena import apply_variables_to_rubric
         from rubric_kit.schema import Rubric, Dimension, Criterion
         
         base_rubric = Rubric(
@@ -254,7 +254,7 @@ class TestApplyVariablesToRubric:
     
     def test_apply_variables_substitutes_tool_params(self):
         """Test that variables are substituted in tool call params."""
-        from rubric_kit.main import apply_variables_to_rubric
+        from rubric_kit.arena import apply_variables_to_rubric
         from rubric_kit.schema import Rubric, Dimension, Criterion, ToolCalls, ToolSpec
         
         base_rubric = Rubric(
@@ -400,7 +400,7 @@ class TestCombineOutputsToArena:
     
     def test_combine_outputs_creates_arena_format(self, sample_output_files):
         """Test that combining outputs creates valid arena format."""
-        from rubric_kit.main import combine_outputs_to_arena
+        from rubric_kit.arena import combine_outputs_to_arena
         
         result = combine_outputs_to_arena(sample_output_files, "Test Arena")
         
@@ -413,7 +413,7 @@ class TestCombineOutputsToArena:
     
     def test_combine_outputs_generates_rankings(self, sample_output_files):
         """Test that combined outputs have correct rankings."""
-        from rubric_kit.main import combine_outputs_to_arena
+        from rubric_kit.arena import combine_outputs_to_arena
         
         result = combine_outputs_to_arena(sample_output_files)
         
@@ -425,7 +425,7 @@ class TestCombineOutputsToArena:
     
     def test_combine_outputs_preserves_metadata(self, sample_output_files):
         """Test that original metadata is preserved in contestant data."""
-        from rubric_kit.main import combine_outputs_to_arena
+        from rubric_kit.arena import combine_outputs_to_arena
         
         result = combine_outputs_to_arena(sample_output_files)
         
@@ -436,7 +436,7 @@ class TestCombineOutputsToArena:
     
     def test_combine_outputs_rejects_arena_files(self, tmp_path):
         """Test that combining fails if an arena file is included."""
-        from rubric_kit.main import combine_outputs_to_arena
+        from rubric_kit.arena import combine_outputs_to_arena
         
         arena_file = tmp_path / "arena_result.yaml"
         with open(arena_file, 'w') as f:
@@ -447,7 +447,7 @@ class TestCombineOutputsToArena:
     
     def test_combine_outputs_rejects_missing_results(self, tmp_path):
         """Test that combining fails if results are missing."""
-        from rubric_kit.main import combine_outputs_to_arena
+        from rubric_kit.arena import combine_outputs_to_arena
         
         bad_file = tmp_path / "bad.yaml"
         with open(bad_file, 'w') as f:
