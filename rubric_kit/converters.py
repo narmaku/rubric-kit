@@ -1,15 +1,118 @@
 """Conversion utilities for rubric-kit data structures.
 
 Provides functions for converting between Pydantic models and dictionary formats
-for YAML/JSON serialization.
+for YAML/JSON serialization, and rebuilding objects from dictionaries.
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from rubric_kit.schema import (
     Rubric, Dimension, Criterion, ToolSpec, ToolCalls,
     JudgePanelConfig, JudgeConfig, ExecutionConfig, ConsensusConfig
 )
+
+
+# =============================================================================
+# Rebuild Functions (Dictionary -> Pydantic Models)
+# =============================================================================
+
+def rebuild_rubric_from_dict(rubric_data: Dict[str, Any]) -> Rubric:
+    """Rebuild a Rubric object from portable dictionary format."""
+    dimensions = [
+        Dimension(
+            name=dim_data["name"],
+            description=dim_data["description"],
+            grading_type=dim_data["grading_type"],
+            scores=dim_data.get("scores"),
+            pass_above=dim_data.get("pass_above")
+        )
+        for dim_data in rubric_data.get("dimensions", [])
+    ]
+    
+    criteria = [
+        _rebuild_criterion(crit_data)
+        for crit_data in rubric_data.get("criteria", [])
+    ]
+    
+    return Rubric(dimensions=dimensions, criteria=criteria)
+
+
+def _rebuild_criterion(crit_data: Dict[str, Any]) -> Criterion:
+    """Rebuild a single Criterion from dictionary data."""
+    tool_calls = None
+    if crit_data.get("tool_calls"):
+        tool_calls = _rebuild_tool_calls(crit_data["tool_calls"])
+    
+    return Criterion(
+        name=crit_data["name"],
+        category=crit_data.get("category"),
+        dimension=crit_data["dimension"],
+        criterion=crit_data.get("criterion"),
+        weight=crit_data["weight"],
+        tool_calls=tool_calls
+    )
+
+
+def _rebuild_tool_calls(tc_data: Dict[str, Any]) -> ToolCalls:
+    """Rebuild ToolCalls from dictionary data."""
+    return ToolCalls(
+        respect_order=tc_data.get("respect_order", True),
+        params_strict_mode=tc_data.get("params_strict_mode", False),
+        required=[
+            ToolSpec(name=list(t.keys())[0], **(list(t.values())[0] or {}))
+            for t in tc_data.get("required", [])
+        ],
+        optional=[
+            ToolSpec(name=list(t.keys())[0], **(list(t.values())[0] or {}))
+            for t in tc_data.get("optional", [])
+        ],
+        prohibited=[
+            ToolSpec(name=list(t.keys())[0])
+            for t in tc_data.get("prohibited", [])
+        ]
+    )
+
+
+def rebuild_panel_config_from_dict(panel_data: Dict[str, Any]) -> JudgePanelConfig:
+    """Rebuild a JudgePanelConfig from portable dictionary format.
+    
+    Uses LiteLLM for provider auto-detection. API keys are read from
+    environment variables based on the model's provider.
+    """
+    judges = [
+        JudgeConfig(
+            name=j_data["name"],
+            model=j_data["model"],
+            base_url=j_data.get("base_url"),
+            temperature=j_data.get("temperature"),
+            max_tokens=j_data.get("max_tokens"),
+            top_p=j_data.get("top_p"),
+            frequency_penalty=j_data.get("frequency_penalty"),
+            presence_penalty=j_data.get("presence_penalty")
+        )
+        for j_data in panel_data.get("judges", [])
+    ]
+    
+    exec_data = panel_data.get("execution", {})
+    execution = ExecutionConfig(
+        mode=exec_data.get("mode", "sequential"),
+        batch_size=exec_data.get("batch_size", 2),
+        timeout=exec_data.get("timeout", 30)
+    )
+    
+    cons_data = panel_data.get("consensus", {})
+    consensus = ConsensusConfig(
+        mode=cons_data.get("mode", "unanimous"),
+        threshold=cons_data.get("threshold"),
+        on_no_consensus=cons_data.get("on_no_consensus", "fail")
+    )
+    
+    return JudgePanelConfig(judges=judges, execution=execution, consensus=consensus)
+
+
+# =============================================================================
+# Conversion Functions (Pydantic Models -> Dictionary)
+# =============================================================================
 
 
 def tool_spec_to_dict(tool_spec: ToolSpec) -> Optional[Dict[str, Any]]:
