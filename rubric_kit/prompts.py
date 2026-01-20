@@ -3,17 +3,18 @@
 This module centralizes all prompts and LLM configurations used in rubric-kit for:
 - Criterion evaluation (binary and score-based)
 - Dimension generation
-- Criteria generation  
+- Criteria generation
 - Rubric refinement
 
 All prompts and configurations are designed to be easily identifiable and modifiable.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any, Tuple
+from typing import Any
+
 import yaml
 
-from rubric_kit.schema import Criterion, Dimension, ToolSpec, ToolCalls
+from rubric_kit.schema import Criterion, Dimension, ToolCalls, ToolSpec
 
 
 # =============================================================================
@@ -21,8 +22,7 @@ from rubric_kit.schema import Criterion, Dimension, ToolSpec, ToolCalls
 # =============================================================================
 
 EVALUATOR_SYSTEM_PROMPT = (
-    "You are a precise evaluator. Follow instructions exactly. "
-    "Be concise and accurate."
+    "You are a precise evaluator. Follow instructions exactly. Be concise and accurate."
 )
 
 GENERATOR_SYSTEM_PROMPT = (
@@ -35,24 +35,26 @@ GENERATOR_SYSTEM_PROMPT = (
 # LLM CONFIGURATIONS
 # =============================================================================
 
+
 @dataclass
 class LLMConfig:
     """
     Configuration for LLM API calls.
-    
+
     Bundles together all parameters needed for a specific LLM "persona":
     - System prompt defining the role
     - Temperature controlling randomness/creativity
     - Max tokens limiting response length
-    
+
     This makes it easy to maintain different configurations for different
     use cases (e.g., deterministic evaluation vs creative generation).
-    
+
     Attributes:
         system_prompt: The system message defining the LLM's role
         temperature: Controls randomness (0.0=deterministic, 1.0=creative)
         max_tokens: Maximum number of tokens in the response
     """
+
     system_prompt: str
     temperature: float
     max_tokens: int
@@ -62,19 +64,19 @@ class LLMConfig:
 EVALUATOR_CONFIG = LLMConfig(
     system_prompt=EVALUATOR_SYSTEM_PROMPT,
     temperature=0.0,  # Deterministic for consistent evaluation
-    max_tokens=8192   # Sufficient for detailed evaluations
+    max_tokens=8192,  # Sufficient for detailed evaluations
 )
 
 TOOL_CALL_EVALUATOR_CONFIG = LLMConfig(
     system_prompt=EVALUATOR_SYSTEM_PROMPT,
-    temperature=0.0,  # Deterministic for consistent evaluation  
-    max_tokens=16384   # More tokens needed for structural comparison and reasoning
+    temperature=0.0,  # Deterministic for consistent evaluation
+    max_tokens=16384,  # More tokens needed for structural comparison and reasoning
 )
 
 GENERATOR_CONFIG = LLMConfig(
     system_prompt=GENERATOR_SYSTEM_PROMPT,
     temperature=0.7,  # More creative for generation tasks
-    max_tokens=16384   # Longer responses for generating rubrics (increased for complex rubrics)
+    max_tokens=16384,  # Longer responses for generating rubrics (increased for complex rubrics)
 )
 
 
@@ -212,40 +214,36 @@ Note: Use hard-coded values directly in criteria - do NOT use variable placehold
 # HELPER FUNCTIONS FOR RUBRIC PROMPTS
 # =============================================================================
 
+
 def _rubric_to_yaml(
-    dimensions: List[Dimension],
-    criteria: List[Criterion],
-    variables: Optional[Dict[str, str]] = None
+    dimensions: list[Dimension], criteria: list[Criterion], variables: dict[str, str] | None = None
 ) -> str:
     """Convert rubric components to YAML string for prompt inclusion."""
-    rubric_dict: Dict[str, Any] = {}
-    
+    rubric_dict: dict[str, Any] = {}
+
     if variables:
         rubric_dict["variables"] = variables
-    
+
     rubric_dict["dimensions"] = [
         {
             "name": d.name,
             "description": d.description,
             "grading_type": d.grading_type,
-            **({"scores": d.scores} if d.scores else {})
+            **({"scores": d.scores} if d.scores else {}),
         }
         for d in dimensions
     ]
-    rubric_dict["criteria"] = [
-        _convert_criterion_to_dict_for_yaml(c)
-        for c in criteria
-    ]
-    
+    rubric_dict["criteria"] = [_convert_criterion_to_dict_for_yaml(c) for c in criteria]
+
     return yaml.dump(rubric_dict, sort_keys=False)
 
 
-def _build_tool_calls_instruction(criteria: List[Criterion]) -> str:
+def _build_tool_calls_instruction(criteria: list[Criterion]) -> str:
     """Build tool calls preservation instruction if any criteria have tool_calls."""
     has_tool_calls = any(c.tool_calls for c in criteria)
     if not has_tool_calls:
         return ""
-    
+
     return (
         "\n\n**CRITICAL - Tool Calls Specifications:**\n"
         "- If a criterion in the current rubric has a 'tool_calls' specification, you MUST preserve it in the refined rubric\n"
@@ -254,34 +252,35 @@ def _build_tool_calls_instruction(criteria: List[Criterion]) -> str:
     )
 
 
-def _build_default_feedback(context_type: Optional[str] = None) -> str:
+def _build_default_feedback(context_type: str | None = None) -> str:
     """Build default feedback section based on context type."""
     base_items = [
         "- Improving descriptions for clarity",
         "- Ensuring proper weight distribution (0-3 range)",
         "- Adding detail where criteria are too vague",
-        "- Extracting specific values to variables if not already done"
+        "- Extracting specific values to variables if not already done",
     ]
-    
+
     if context_type == "qa":
         return (
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable based on the Q&A pair\n"
-            + "\n".join(base_items) + "\n"
+            + "\n".join(base_items)
+            + "\n"
             "- Ensuring criteria accurately reflect what should be evaluated in the answer"
         )
     elif context_type == "chat":
         return (
             "\n\nPlease improve the rubric by:\n"
             "- Making criteria more specific and measurable based on the chat session\n"
-            + "\n".join(base_items) + "\n"
+            + "\n".join(base_items)
+            + "\n"
             "- Ensuring criteria accurately reflect tool usage, output quality, and other aspects shown in the chat"
         )
     else:
         return (
             "\n\nPlease improve the rubric by:\n"
-            "- Making criteria more specific and measurable\n"
-            + "\n".join(base_items)
+            "- Making criteria more specific and measurable\n" + "\n".join(base_items)
         )
 
 
@@ -290,17 +289,17 @@ def _build_refine_prompt_core(
     feedback_section: str,
     tool_calls_instruction: str,
     context_header: str = "",
-    analysis_instruction: str = ""
+    analysis_instruction: str = "",
 ) -> str:
     """Core prompt builder for rubric refinement."""
     intro = "Refine the following evaluation rubric to improve its quality"
     if context_header:
         intro += f", using the {context_header} as context"
     intro += "."
-    
+
     return f"""{intro}
 
-{context_header and f"**Current Rubric:**" or "Current Rubric:"}
+{context_header and "**Current Rubric:**" or "Current Rubric:"}
 {rubric_yaml}{feedback_section}{tool_calls_instruction}
 
 {analysis_instruction}
@@ -327,6 +326,7 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 # =============================================================================
 # HELPER FUNCTIONS FOR TOOL CALL PROMPTS
 # =============================================================================
+
 
 def _format_tool_constraints(tool: ToolSpec) -> str:
     """Format min/max call constraints for a tool."""
@@ -355,13 +355,13 @@ def _build_required_tools_section(tool_calls: ToolCalls) -> str:
     """Build the required tools section of the prompt."""
     if not tool_calls.required:
         return ""
-    
+
     lines = []
     for tool in tool_calls.required:
         constraint = _format_tool_constraints(tool)
         params_info = _format_tool_params(tool)
         lines.append(f"  - {tool.name}{constraint}{params_info}")
-    
+
     return "**Required Tools:**\n" + "\n".join(lines)
 
 
@@ -369,12 +369,12 @@ def _build_optional_tools_section(tool_calls: ToolCalls) -> str:
     """Build the optional tools section of the prompt."""
     if not tool_calls.optional:
         return ""
-    
+
     lines = []
     for tool in tool_calls.optional:
         max_constraint = f" (max: {tool.max_calls})" if tool.max_calls is not None else ""
         lines.append(f"  - {tool.name}{max_constraint}")
-    
+
     return "\n\n**Optional Tools:**\n" + "\n".join(lines)
 
 
@@ -382,38 +382,33 @@ def _build_prohibited_tools_section(tool_calls: ToolCalls) -> str:
     """Build the prohibited tools section of the prompt."""
     if not tool_calls.prohibited:
         return ""
-    
+
     lines = [f"  - {tool.name}" for tool in tool_calls.prohibited]
     return "\n\n**Prohibited Tools:**\n" + "\n".join(lines)
 
 
-def _build_required_tool_lists(tool_calls: ToolCalls) -> Tuple[str, str, str, str]:
+def _build_required_tool_lists(tool_calls: ToolCalls) -> tuple[str, str, str, str]:
     """
     Build various formats of required tool lists.
-    
+
     Returns:
         Tuple of (numbered_list, labeled_list, comma_separated, bullet_list)
     """
     if not tool_calls.required:
         return "", "", "", ""
-    
+
     tool_names = [tool.name for tool in tool_calls.required]
     numbered_items = [f"{i}. {name}" for i, name in enumerate(tool_names, 1)]
     labeled_items = [f"REQUIRED TOOL #{i}: {name}" for i, name in enumerate(tool_names, 1)]
     comma_separated = ", ".join(tool_names)
     bullet_list = "\n".join([f"   - {name}" for name in tool_names])
-    
-    return (
-        "\n".join(numbered_items),
-        "\n".join(labeled_items),
-        comma_separated,
-        bullet_list
-    )
+
+    return ("\n".join(numbered_items), "\n".join(labeled_items), comma_separated, bullet_list)
 
 
 def _build_param_check_instructions(tool_calls: ToolCalls) -> str:
     """Build parameter checking instructions based on params specification.
-    
+
     Logic:
     - If params is None (not declared) → no validation, return empty string
     - If params is {} (empty dict) → check that tool was called without params
@@ -421,87 +416,95 @@ def _build_param_check_instructions(tool_calls: ToolCalls) -> str:
     """
     if not tool_calls.required:
         return ""
-    
+
     # Check if any tool has params validation requirements
     tools_with_empty_params = [tool for tool in tool_calls.required if tool.params == {}]
-    tools_with_specified_params = [tool for tool in tool_calls.required if tool.params is not None and tool.params != {}]
-    
+    tools_with_specified_params = [
+        tool for tool in tool_calls.required if tool.params is not None and tool.params != {}
+    ]
+
     # If no tools have params validation requirements, return empty
     if not tools_with_empty_params and not tools_with_specified_params:
         return ""
-    
+
     instructions = []
     instructions.append("\n   **Check parameters** (CRITICAL)")
-    
+
     # Handle tools that must be called with NO parameters
     if tools_with_empty_params:
         tool_names = [tool.name for tool in tools_with_empty_params]
-        instructions.append(f"   - The following tools MUST be called with NO parameters: {', '.join(tool_names)}")
+        instructions.append(
+            f"   - The following tools MUST be called with NO parameters: {', '.join(tool_names)}"
+        )
         instructions.append("   - If any of these tools were called WITH parameters → FAIL")
-    
+
     # Handle tools with specified parameters
     if tools_with_specified_params:
-        instructions.append("   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values")
-        instructions.append("   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)")
+        instructions.append(
+            "   - For each required tool that specifies parameters, verify the actual call used the EXACT parameter values"
+        )
+        instructions.append(
+            "   - Compare expected parameters (from specification above) with actual parameters (from extracted calls)"
+        )
         instructions.append("   - Parameter names must match exactly (case-sensitive)")
-        instructions.append("   - Parameter values must match exactly (no partial matches, no \"close enough\")")
+        instructions.append(
+            '   - Parameter values must match exactly (no partial matches, no "close enough")'
+        )
         instructions.append("   - Missing parameters = FAIL")
         instructions.append("   - Wrong parameter values = FAIL")
-        
+
         if tool_calls.params_strict_mode:
-            instructions.append("   - STRICT MODE: Extra parameters are NOT allowed - exactly the specified params must match")
+            instructions.append(
+                "   - STRICT MODE: Extra parameters are NOT allowed - exactly the specified params must match"
+            )
             instructions.append("   - If ANY extra parameter is present → FAIL")
         else:
             instructions.append("   - Extra parameters are OK (only required ones must match)")
-        
+
         instructions.append("   - If ANY required parameter is missing or wrong → FAIL")
-    
+
     return "\n".join(instructions)
 
 
-def _find_tool_call_parameters(
-    tool_name: str,
-    parsed_tool_calls: Optional[List[Any]]
-) -> str:
+def _find_tool_call_parameters(tool_name: str, parsed_tool_calls: list[Any] | None) -> str:
     """Find and format parameters for a specific tool call."""
     if not parsed_tool_calls:
         return ""
-    
+
     for tc in parsed_tool_calls:
-        if (_matches_tool_name(tc, tool_name) and tc.parameters):
+        if _matches_tool_name(tc, tool_name) and tc.parameters:
             params_list = []
             for k, v in tc.parameters.items():
                 param_value = "null" if v is None else str(v)
                 params_list.append(f"{k}: {param_value}")
             if params_list:
                 return f" (parameters: {', '.join(params_list)})"
-    
+
     return ""
 
 
 def _matches_tool_name(tool_call: Any, name: str) -> bool:
     """Check if a tool call matches a given name."""
     return (
-        tool_call.full_name == name or
-        tool_call.function == name or
-        name.endswith(f".{tool_call.function}") or
-        tool_call.full_name.endswith(f".{name}")
+        tool_call.full_name == name
+        or tool_call.function == name
+        or name.endswith(f".{tool_call.function}")
+        or tool_call.full_name.endswith(f".{name}")
     )
 
 
 def _build_actual_calls_section(
-    tool_call_sequence: Optional[List[str]],
-    parsed_tool_calls: Optional[List[Any]]
+    tool_call_sequence: list[str] | None, parsed_tool_calls: list[Any] | None
 ) -> str:
     """Build the actual tool calls section from pre-parsed data."""
     if tool_call_sequence is None:
         return ""
-    
+
     call_lines = []
     for i, name in enumerate(tool_call_sequence, 1):
         params_str = _find_tool_call_parameters(name, parsed_tool_calls)
         call_lines.append(f"{i}. {name}{params_str}")
-    
+
     return f"""
 **EXTRACTED TOOL CALLS (in order):**
 {chr(10).join(call_lines)}
@@ -516,7 +519,7 @@ def _build_order_evaluation_body(
     required_tool_names_list: str,
     param_check_instructions: str,
     actual_calls_section: str,
-    has_preparsed_data: bool
+    has_preparsed_data: bool,
 ) -> str:
     """Build evaluation body for order-sensitive tool call evaluation."""
     if has_preparsed_data:
@@ -526,15 +529,15 @@ def _build_order_evaluation_body(
             required_tool_names_bullets,
             required_tool_names_list,
             param_check_instructions,
-            actual_calls_section
+            actual_calls_section,
         )
-    
+
     return _build_order_evaluation_without_data(
         required_tool_list_numbered,
         required_tool_list,
         required_tool_names_bullets,
         required_tool_names_list,
-        param_check_instructions
+        param_check_instructions,
     )
 
 
@@ -544,11 +547,13 @@ def _build_order_evaluation_with_data(
     required_tool_names_bullets: str,
     required_tool_names_list: str,
     param_check_instructions: str,
-    actual_calls_section: str
+    actual_calls_section: str,
 ) -> str:
     """Build order evaluation body when pre-parsed data is available."""
-    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else ""
-    
+    first_tool_example = (
+        required_tool_names_list.split(",")[0].strip() if required_tool_names_list else ""
+    )
+
     return f"""**Evaluation Instructions:**
 
 Expected order:
@@ -565,7 +570,7 @@ The specification requires these tools IN THIS EXACT ORDER:
    - Position 2: Does extracted call #2 match REQUIRED TOOL #2?
    - Continue for all positions
    - If ANY position doesn't match → ORDER IS WRONG → FAIL
-   
+
 2. **Check other requirements**
    - All required tools present? The required tools are:
 {required_tool_names_bullets}
@@ -576,12 +581,12 @@ The specification requires these tools IN THIS EXACT ORDER:
 3. **Final result**
    - Order wrong → FAIL
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
+   - Violated any limit → FAIL{"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Copy the exact tool identifier from the list above, such as "{first_tool_example}" or another tool from the list.]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool identifiers. For missing tools: you MUST state which specific tool from this list was not called: {required_tool_names_list}.{" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Copy the exact tool identifier from the list above, such as "{first_tool_example}" or another tool from the list.]
 """
 
 
@@ -590,7 +595,7 @@ def _build_order_evaluation_without_data(
     required_tool_list: str,
     required_tool_names_bullets: str,
     required_tool_names_list: str,
-    param_check_instructions: str
+    param_check_instructions: str,
 ) -> str:
     """Build order evaluation body when data must be extracted from chat."""
     return f"""**Evaluation Instructions:**
@@ -606,17 +611,17 @@ The specification requires these tools IN THIS EXACT ORDER:
 1. **Find the tool calls in the chat session**
    - Scan through the chat session and identify all tool calls
    - Extract the tool names in the order they were called
-   
+
 2. **Write down the actual order you found**
    - List them: "First tool called: <actual_tool_name>, Second tool called: <actual_tool_name>, ..."
    - IMPORTANT: Use the actual tool names you found in the chat session, not placeholders
-   
+
 3. **Compare against the required order**
    - Position 1: Does first tool called = REQUIRED TOOL #1? (MUST match exactly)
    - Position 2: Does second tool called = REQUIRED TOOL #2? (MUST match exactly)
    - Continue for all positions
    - If ANY position doesn't match → ORDER IS WRONG → FAIL
-   
+
 4. **Check other requirements**
    - All required tools present? The required tools are:
 {required_tool_names_bullets}
@@ -627,12 +632,12 @@ The specification requires these tools IN THIS EXACT ORDER:
 5. **Final result**
    - Order wrong → FAIL
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
-   - Violated any limit → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
+   - Violated any limit → FAIL{"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Use the exact tool name, not a placeholder or the word "name".]
+REASON: [One sentence. For order failures: state both the required order and actual order using the exact tool names from the specification. For missing tools: you MUST state the exact tool name that was not called from this list: {required_tool_names_list}.{" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} Use the exact tool name, not a placeholder or the word "name".]
 """
 
 
@@ -643,7 +648,7 @@ def _build_presence_evaluation_body(
     required_tool_names_list: str,
     param_check_instructions: str,
     actual_calls_section: str,
-    has_preparsed_data: bool
+    has_preparsed_data: bool,
 ) -> str:
     """Build evaluation body for order-insensitive tool call evaluation."""
     if has_preparsed_data:
@@ -652,14 +657,14 @@ def _build_presence_evaluation_body(
             required_tool_names_bullets,
             required_tool_names_list,
             param_check_instructions,
-            actual_calls_section
+            actual_calls_section,
         )
-    
+
     return _build_presence_evaluation_without_data(
         required_tool_list,
         required_tool_names_bullets,
         required_tool_names_list,
-        param_check_instructions
+        param_check_instructions,
     )
 
 
@@ -668,11 +673,15 @@ def _build_presence_evaluation_with_data(
     required_tool_names_bullets: str,
     required_tool_names_list: str,
     param_check_instructions: str,
-    actual_calls_section: str
+    actual_calls_section: str,
 ) -> str:
     """Build presence evaluation body when pre-parsed data is available."""
-    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else "[tool_identifier]"
-    
+    first_tool_example = (
+        required_tool_names_list.split(",")[0].strip()
+        if required_tool_names_list
+        else "[tool_identifier]"
+    )
+
     return f"""**Evaluation Instructions:**
 
 The specification requires these tools (ORDER DOESN'T MATTER):
@@ -687,23 +696,23 @@ The specification requires these tools (ORDER DOESN'T MATTER):
    - Check if each of these exact tool identifiers appears in the extracted calls list above
    - Order doesn't matter
    - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
-   
+
 2. **Check counts** (if limits specified)
    - Are call counts within min/max limits?
    - Are optional tools within limits (if any)?{param_check_instructions}
-   
+
 3. **Check prohibitions** (if any)
    - Were any prohibited tools called?
 
 4. **Final result**
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
    - Violated any limit → FAIL
-   - Called prohibited tool → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
+   - Called prohibited tool → FAIL{"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
 """
 
 
@@ -711,11 +720,15 @@ def _build_presence_evaluation_without_data(
     required_tool_list: str,
     required_tool_names_bullets: str,
     required_tool_names_list: str,
-    param_check_instructions: str
+    param_check_instructions: str,
 ) -> str:
     """Build presence evaluation body when data must be extracted from chat."""
-    first_tool_example = required_tool_names_list.split(",")[0].strip() if required_tool_names_list else "[tool_identifier]"
-    
+    first_tool_example = (
+        required_tool_names_list.split(",")[0].strip()
+        if required_tool_names_list
+        else "[tool_identifier]"
+    )
+
     return f"""**Evaluation Instructions:**
 
 The specification requires these tools (ORDER DOESN'T MATTER):
@@ -726,29 +739,29 @@ The specification requires these tools (ORDER DOESN'T MATTER):
 1. **Find all tool calls in the chat session**
    - Scan through and identify all tool calls
    - Order doesn't matter for this evaluation
-   
+
 2. **Check presence**
    - The following required tools MUST be called at least once:
 {required_tool_names_bullets}
    - Check if each of these exact tool identifiers appears in the chat session
    - If reporting a missing tool in your REASON, copy one of these exact identifiers: {required_tool_names_list}
-   
+
 3. **Check counts** (if limits specified)
    - Are call counts within min/max limits?
    - Are optional tools within limits (if any)?{param_check_instructions}
-   
+
 4. **Check prohibitions** (if any)
    - Were any prohibited tools called?
 
 5. **Final result**
    - If any of the required tools ({required_tool_names_list}) is missing → FAIL
    - Violated any limit → FAIL
-   - Called prohibited tool → FAIL{f"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
+   - Called prohibited tool → FAIL{"   - Wrong or missing parameters → FAIL" if param_check_instructions else ""}
    - Otherwise → PASS
 
 **Your response format (2 lines only):**
 RESULT: [PASS or FAIL]
-REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{f" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
+REASON: [One sentence explaining what passed or what violation occurred. If a required tool is missing, you MUST copy one of these exact tool identifiers that was not called: {required_tool_names_list}.{" For parameter failures: state which tool had wrong/missing parameters and what was expected vs actual." if param_check_instructions else ""} For example, if {first_tool_example} was not called, write: "Required tool {first_tool_example} was not called."]
 """
 
 
@@ -756,17 +769,15 @@ REASON: [One sentence explaining what passed or what violation occurred. If a re
 # EVALUATION PROMPTS
 # =============================================================================
 
-def build_binary_criterion_prompt(
-    criterion: Criterion,
-    chat_content: str
-) -> str:
+
+def build_binary_criterion_prompt(criterion: Criterion, chat_content: str) -> str:
     """
     Build a prompt for binary (pass/fail) criterion evaluation.
-    
+
     Args:
         criterion: The criterion to evaluate
         chat_content: The chat session content to evaluate
-        
+
     Returns:
         Formatted prompt string for the LLM
     """
@@ -830,25 +841,25 @@ REASON: Required information about topic Y is not mentioned in the response.
 def build_tool_call_evaluation_prompt(
     criterion: Criterion,
     chat_content: str,
-    tool_call_sequence: Optional[List[str]] = None,
-    parsed_tool_calls: Optional[List[Any]] = None
+    tool_call_sequence: list[str] | None = None,
+    parsed_tool_calls: list[Any] | None = None,
 ) -> str:
     """
     Build a prompt for tool call evaluation.
-    
+
     Tool call evaluation compares extracted tool calls against specifications.
     If tool_call_sequence is provided (pre-parsed), evaluation is deterministic.
     Otherwise, the judge must extract tool calls from raw chat content.
-    
+
     Args:
         criterion: The criterion with tool_calls specification
         chat_content: The chat session content to evaluate
         tool_call_sequence: Optional pre-parsed list of tool names in order
         parsed_tool_calls: Optional pre-parsed list of ToolCall objects with parameters
-        
+
     Returns:
         Formatted prompt string for the LLM
-        
+
     Raises:
         ValueError: If criterion doesn't have tool_calls defined
     """
@@ -856,24 +867,29 @@ def build_tool_call_evaluation_prompt(
         raise ValueError(
             f"Criterion '{criterion.name}' must have tool_calls defined for tool call evaluation"
         )
-    
+
     tool_calls = criterion.tool_calls
     has_preparsed_data = tool_call_sequence is not None
-    
+
     # Build tool specification sections
     required_section = _build_required_tools_section(tool_calls)
     optional_section = _build_optional_tools_section(tool_calls)
     prohibited_section = _build_prohibited_tools_section(tool_calls)
-    
+
     # Build required tool lists in various formats
-    required_tool_list_numbered, required_tool_list, required_tool_names_list, required_tool_names_bullets = _build_required_tool_lists(tool_calls)
-    
+    (
+        required_tool_list_numbered,
+        required_tool_list,
+        required_tool_names_list,
+        required_tool_names_bullets,
+    ) = _build_required_tool_lists(tool_calls)
+
     # Build parameter checking instructions
     param_check_instructions = _build_param_check_instructions(tool_calls)
-    
+
     # Build actual calls section if pre-parsed data available
     actual_calls_section = _build_actual_calls_section(tool_call_sequence, parsed_tool_calls)
-    
+
     # Build evaluation body based on order sensitivity and data availability
     if tool_calls.respect_order:
         evaluation_body = _build_order_evaluation_body(
@@ -884,7 +900,7 @@ def build_tool_call_evaluation_prompt(
             required_tool_names_list,
             param_check_instructions,
             actual_calls_section,
-            has_preparsed_data
+            has_preparsed_data,
         )
     else:
         evaluation_body = _build_presence_evaluation_body(
@@ -894,9 +910,9 @@ def build_tool_call_evaluation_prompt(
             required_tool_names_list,
             param_check_instructions,
             actual_calls_section,
-            has_preparsed_data
+            has_preparsed_data,
         )
-    
+
     return f"""You are an expert at evaluating tool usage in chat sessions.
 
 **Tool Usage Specification:**
@@ -911,21 +927,19 @@ def build_tool_call_evaluation_prompt(
 
 
 def build_score_criterion_prompt(
-    criterion: Criterion,
-    chat_content: str,
-    dimension: Dimension
+    criterion: Criterion, chat_content: str, dimension: Dimension
 ) -> str:
     """
     Build a prompt for score-based criterion evaluation.
-    
+
     Args:
         criterion: The criterion to evaluate
         chat_content: The chat session content to evaluate
         dimension: The dimension with score scale definitions
-        
+
     Returns:
         Formatted prompt string for the LLM
-        
+
     Raises:
         ValueError: If dimension doesn't have scores defined
     """
@@ -934,12 +948,11 @@ def build_score_criterion_prompt(
             f"Dimension '{dimension.name}' does not have scores defined. "
             "Score-based evaluation requires a dimension with scores."
         )
-    
-    score_descriptions = "\n".join([
-        f"{score}: {desc}" 
-        for score, desc in sorted(dimension.scores.items())
-    ])
-    
+
+    score_descriptions = "\n".join(
+        [f"{score}: {desc}" for score, desc in sorted(dimension.scores.items())]
+    )
+
     return f"""You are an expert evaluator. Your task is to score a chat session based on a specific criterion.
 
 **Criterion Details:**
@@ -971,35 +984,36 @@ REASON: Response includes all essential information with no gaps.
 # GENERATION PROMPTS
 # =============================================================================
 
+
 def build_dimension_generation_prompt(
     question: str,
     answer: str,
-    num_dimensions: Optional[int],
-    context: Optional[str] = None,
-    guidelines: Optional[str] = None
+    num_dimensions: int | None,
+    context: str | None = None,
+    guidelines: str | None = None,
 ) -> str:
     """
     Build a prompt for generating evaluation dimensions from a Q&A pair.
-    
+
     Args:
         question: The question being evaluated
         answer: The answer being evaluated
         num_dimensions: Number of dimensions to generate, or None for auto
         context: Optional additional context
         guidelines: Optional specific guidelines/hints to guide dimension generation
-        
+
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
-    
+
     count_instruction = (
         f"Generate {num_dimensions} evaluation dimensions"
         if num_dimensions is not None
         else "Generate an appropriate number of evaluation dimensions (between 3 and 10)"
     )
-    
+
     return f"""Given the following Question and Answer pair, {count_instruction} for assessing answer quality.
 
 Question: {question}
@@ -1056,16 +1070,16 @@ Return ONLY a JSON array of dimension objects. Example format:
 def build_criteria_generation_prompt(
     question: str,
     answer: str,
-    dimensions: List[Dimension],
-    num_criteria: Optional[int],
-    category_hints: Optional[List[str]] = None,
-    context: Optional[str] = None,
+    dimensions: list[Dimension],
+    num_criteria: int | None,
+    category_hints: list[str] | None = None,
+    context: str | None = None,
     use_variables: bool = True,
-    guidelines: Optional[str] = None
+    guidelines: str | None = None,
 ) -> str:
     """
     Build a prompt for generating evaluation criteria from Q&A and dimensions.
-    
+
     Args:
         question: The question being evaluated
         answer: The answer being evaluated
@@ -1075,46 +1089,45 @@ def build_criteria_generation_prompt(
         context: Optional additional context
         use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
         guidelines: Optional specific guidelines/hints to guide criteria generation
-        
+
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
-    
+
     # Format dimensions for prompt
-    dimensions_str = "\n".join([
-        f"- {d.name} ({d.grading_type}): {d.description}"
-        for d in dimensions
-    ])
-    
+    dimensions_str = "\n".join(
+        [f"- {d.name} ({d.grading_type}): {d.description}" for d in dimensions]
+    )
+
     category_guidance = (
         f"\n\nPreferred categories to use: {', '.join(category_hints)}"
         if category_hints
         else "\n\nSuggested categories: Output, Reasoning, Completeness, Accuracy, Clarity"
     )
-    
+
     count_instruction = (
         f"generate {num_criteria} specific evaluation criteria"
         if num_criteria is not None
         else "generate an appropriate number of specific evaluation criteria (between 5 and 10, as many as needed to thoroughly evaluate the answer)"
     )
-    
+
     if use_variables:
         variables_section = """**IMPORTANT - Variables Section:**
 Extract specific data values from the answer (names, numbers, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{variable_name}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values. This makes the rubric reusable with different data."""
-        
+
         criteria_item_2 = """2. **Use variables for specific values** - extract specific data values to the variables section and reference them using {{variable_name}} syntax"""
-        
+
         atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
 - WRONG: "The answer correctly reports RAM (~{{ram_total}}) and disk size ({{disk_size}})" - This mixes two values!
 - RIGHT: Create TWO separate criteria:
   1. "The answer correctly reports RAM as ~{{ram_total}}"
   2. "The answer correctly reports disk size as {{disk_size}}"
 - Each factual accuracy criterion should verify ONE atomic value against ground truth"""
-        
+
         criterion_field = """- criterion: Specific text describing what to check, using {{variable_name}} for specific values (or "from_scores" for score dimensions)"""
-        
+
         json_example = """Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
 {
   "variables": {
@@ -1143,18 +1156,18 @@ Note: Extract ALL specific data values (names, numbers, identifiers, etc.) to th
     else:
         variables_section = """**IMPORTANT - No Variables Mode:**
 Do NOT create a variables section. Use hard-coded values directly in criterion text and tool_calls params. Write specific, concrete values directly into the criteria."""
-        
+
         criteria_item_2 = """2. **Use hard-coded values** - write specific values directly into criteria (e.g., "IP address is '10.0.187.159'" not "IP address is '{{ip_address}}'")"""
-        
+
         atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
 - WRONG: "The answer correctly reports RAM (~1.7GB) and disk size (50GB)" - This mixes two values!
 - RIGHT: Create TWO separate criteria:
   1. "The answer correctly reports RAM as ~1.7GB"
   2. "The answer correctly reports disk size as 50GB"
 - Each factual accuracy criterion should verify ONE atomic value against ground truth"""
-        
+
         criterion_field = """- criterion: Specific text describing what to check with hard-coded values (or "from_scores" for score dimensions)"""
-        
+
         json_example = """Return ONLY a JSON object with "criteria" key (NO variables section). Example format:
 {
   "criteria": [
@@ -1176,7 +1189,7 @@ Do NOT create a variables section. Use hard-coded values directly in criterion t
 }
 
 Note: Use hard-coded values directly in criteria - do NOT use variable placeholders."""
-    
+
     return f"""Given the following Question, Answer, and Dimensions, {count_instruction}.
 
 Question: {question}
@@ -1217,46 +1230,58 @@ Each criterion should have:
 {json_example}"""
 
 
-def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> Dict[str, Any]:
+def _convert_criterion_to_dict_for_yaml(criterion: Criterion) -> dict[str, Any]:
     """Convert a criterion to dict format for YAML display, including tool_calls if present."""
-    crit_dict: Dict[str, Any] = {
+    crit_dict: dict[str, Any] = {
         "name": criterion.name,
         "category": criterion.category,
         "weight": criterion.weight,
         "dimension": criterion.dimension,
-        "criterion": criterion.criterion
+        "criterion": criterion.criterion,
     }
-    
+
     if criterion.tool_calls:
         required_list = [
-            {tc.name: {"min_calls": tc.min_calls, "max_calls": tc.max_calls, **({"params": tc.params} if tc.params else {})}}
+            {
+                tc.name: {
+                    "min_calls": tc.min_calls,
+                    "max_calls": tc.max_calls,
+                    **({"params": tc.params} if tc.params else {}),
+                }
+            }
             for tc in criterion.tool_calls.required
         ]
         optional_list = [
-            {tc.name: {"min_calls": tc.min_calls, "max_calls": tc.max_calls, **({"params": tc.params} if tc.params else {})}}
+            {
+                tc.name: {
+                    "min_calls": tc.min_calls,
+                    "max_calls": tc.max_calls,
+                    **({"params": tc.params} if tc.params else {}),
+                }
+            }
             for tc in criterion.tool_calls.optional
         ]
         prohibited_list = [tc.name for tc in criterion.tool_calls.prohibited]
-        
+
         crit_dict["tool_calls"] = {
             "respect_order": criterion.tool_calls.respect_order,
             "required": required_list,
             "optional": optional_list if optional_list else [],
-            "prohibited": prohibited_list if prohibited_list else []
+            "prohibited": prohibited_list if prohibited_list else [],
         }
-    
+
     return crit_dict
 
 
 def build_refine_rubric_prompt(
-    dimensions: List[Dimension],
-    criteria: List[Criterion],
-    feedback: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None,
-    use_variables: bool = True
+    dimensions: list[Dimension],
+    criteria: list[Criterion],
+    feedback: str | None = None,
+    variables: dict[str, str] | None = None,
+    use_variables: bool = True,
 ) -> str:
     """Build a prompt for refining an existing rubric.
-    
+
     Args:
         dimensions: List of dimensions to include
         criteria: List of criteria to include
@@ -1265,12 +1290,14 @@ def build_refine_rubric_prompt(
         use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
     """
     rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
-    feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback()
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback()
+    )
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
-    
+
     variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
     json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
-    
+
     return f"""Refine the following evaluation rubric to improve its quality.
 
 Current Rubric:
@@ -1296,17 +1323,17 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 
 def build_refine_rubric_with_qa_prompt(
-    dimensions: List[Dimension],
-    criteria: List[Criterion],
+    dimensions: list[Dimension],
+    criteria: list[Criterion],
     question: str,
     answer: str,
-    feedback: Optional[str] = None,
-    context: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None,
-    use_variables: bool = True
+    feedback: str | None = None,
+    context: str | None = None,
+    variables: dict[str, str] | None = None,
+    use_variables: bool = True,
 ) -> str:
     """Build a prompt for refining an existing rubric using Q&A context.
-    
+
     Args:
         dimensions: List of dimensions to include
         criteria: List of criteria to include
@@ -1319,12 +1346,14 @@ def build_refine_rubric_with_qa_prompt(
     """
     rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
-    feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("qa")
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("qa")
+    )
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
-    
+
     variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
     json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
-    
+
     return f"""Refine the following evaluation rubric to improve its quality, using the Q&A pair as context.
 
 **Q&A Pair:**
@@ -1354,16 +1383,16 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 
 def build_refine_rubric_with_chat_prompt(
-    dimensions: List[Dimension],
-    criteria: List[Criterion],
+    dimensions: list[Dimension],
+    criteria: list[Criterion],
     chat_content: str,
-    feedback: Optional[str] = None,
-    context: Optional[str] = None,
-    variables: Optional[Dict[str, str]] = None,
-    use_variables: bool = True
+    feedback: str | None = None,
+    context: str | None = None,
+    variables: dict[str, str] | None = None,
+    use_variables: bool = True,
 ) -> str:
     """Build a prompt for refining an existing rubric using chat session context.
-    
+
     Args:
         dimensions: List of dimensions to include
         criteria: List of criteria to include
@@ -1375,12 +1404,14 @@ def build_refine_rubric_with_chat_prompt(
     """
     rubric_yaml = _rubric_to_yaml(dimensions, criteria, variables if use_variables else None)
     context_info = f"\n\nAdditional Context: {context}" if context else ""
-    feedback_section = f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("chat")
+    feedback_section = (
+        f"\n\nSpecific Feedback:\n{feedback}" if feedback else _build_default_feedback("chat")
+    )
     tool_calls_instruction = _build_tool_calls_instruction(criteria)
-    
+
     variables_guidance = _VARIABLES_GUIDANCE if use_variables else _NO_VARIABLES_GUIDANCE
     json_format = _JSON_OUTPUT_FORMAT if use_variables else _JSON_OUTPUT_FORMAT_NO_VARS
-    
+
     return f"""Refine the following evaluation rubric to improve its quality, using the chat session as context.
 
 **Chat Session:**
@@ -1410,31 +1441,31 @@ Return the refined rubric as JSON with the same structure. Maintain all dimensio
 
 def build_chat_dimension_generation_prompt(
     chat_content: str,
-    num_dimensions: Optional[int],
-    context: Optional[str] = None,
-    guidelines: Optional[str] = None
+    num_dimensions: int | None,
+    context: str | None = None,
+    guidelines: str | None = None,
 ) -> str:
     """
     Build a prompt for generating evaluation dimensions from a chat session.
-    
+
     Args:
         chat_content: The raw chat session content
         num_dimensions: Number of dimensions to generate, or None for auto
         context: Optional additional context
         guidelines: Optional specific guidelines/hints to guide dimension generation
-        
+
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
-    
+
     count_instruction = (
         f"Generate {num_dimensions} evaluation dimensions"
         if num_dimensions is not None
         else "Generate an appropriate number of evaluation dimensions (between 5 and 10, as many as needed)"
     )
-    
+
     return f"""Given the following chat session, {count_instruction} for assessing the assistant's performance.
 
 **Chat Session:**
@@ -1465,7 +1496,7 @@ Each dimension should:
 - One "factual_accuracy" dimension can be used by MANY criteria checking different facts
 - The CRITERIA will specify what specific values to check (e.g., "field X equals value Y")
 
-IMPORTANT: 
+IMPORTANT:
 - If tools were used, include one dimension for tool usage evaluation (typically named "tool_use")
 - **Prefer "binary" grading type for fact-checking dimensions**
 - Typical dimensions needed: tool_use, factual_accuracy, completeness, clarity
@@ -1521,16 +1552,16 @@ Return ONLY a JSON array of dimension objects. Example format:
 
 def build_chat_criteria_generation_prompt(
     chat_content: str,
-    dimensions: List[Dimension],
-    num_criteria: Optional[int],
-    category_hints: Optional[List[str]] = None,
-    context: Optional[str] = None,
+    dimensions: list[Dimension],
+    num_criteria: int | None,
+    category_hints: list[str] | None = None,
+    context: str | None = None,
     use_variables: bool = True,
-    guidelines: Optional[str] = None
+    guidelines: str | None = None,
 ) -> str:
     """
     Build a prompt for generating evaluation criteria from a chat session.
-    
+
     Args:
         chat_content: The raw chat session content
         dimensions: List of dimensions to create criteria for
@@ -1539,44 +1570,45 @@ def build_chat_criteria_generation_prompt(
         context: Optional additional context
         use_variables: If True, instruct LLM to extract variables. If False, use hard-coded values.
         guidelines: Optional specific guidelines/hints to guide criteria generation
-        
+
     Returns:
         Formatted prompt string for the LLM
     """
     context_info = f"\n\nAdditional Context: {context}" if context else ""
     guidelines_section = f"\n\n**Generation Guidelines:**\n{guidelines}" if guidelines else ""
-    
+
     # Format dimensions for prompt
-    dimensions_str = "\n".join([
-        f"- {d.name} ({d.grading_type}): {d.description}"
-        for d in dimensions
-    ])
-    
+    dimensions_str = "\n".join(
+        [f"- {d.name} ({d.grading_type}): {d.description}" for d in dimensions]
+    )
+
     category_guidance = (
         f"\n\nPreferred categories to use: {', '.join(category_hints)}"
         if category_hints
         else "\n\nSuggested categories: Tools, Output, Reasoning, Completeness, Accuracy"
     )
-    
+
     count_instruction = (
         f"generate {num_criteria} specific evaluation criteria"
         if num_criteria is not None
         else "generate an appropriate number of specific evaluation criteria (between 7 and 12, create enough to check all important aspects including tool calls and key facts)"
     )
-    
+
     if use_variables:
         variables_section = """**IMPORTANT - Variables Section:**
 Extract specific data values from the chat session (IP addresses, RAM amounts, percentages, identifiers, etc.) and put them in a "variables" section. Variables should ONLY contain actual, correct values - NOT examples of incorrect values. Then use {{variable_name}} placeholders in your criterion text AND tool_calls params instead of hard-coding the values."""
-        
-        criteria_item_3 = """3. **Use variables** - reference values using {{variable_name}} syntax"""
-        
+
+        criteria_item_3 = (
+            """3. **Use variables** - reference values using {{variable_name}} syntax"""
+        )
+
         atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
 - WRONG: "The response correctly states the RAM (~{{ram_total}}) and IP address ({{ip_address}})" - Mixes two values!
 - RIGHT: Create SEPARATE criteria:
   1. "The response correctly states RAM as ~{{ram_total}}"
   2. "The response correctly states IP address as {{ip_address}}"
 - ONE value per factual accuracy criterion - no exceptions"""
-        
+
         json_example = """Return ONLY a JSON object with "variables" and "criteria" keys. Example format:
 {
   "variables": {
@@ -1633,23 +1665,23 @@ Extract specific data values from the chat session (IP addresses, RAM amounts, p
   ]
 }
 
-Note: 
+Note:
 - Extract actual tool names from the chat session
 - Scoring inferred from lists: required=pass/fail, optional=bonus, prohibited=penalty
 - Extract ALL specific data values to the variables section"""
     else:
         variables_section = """**IMPORTANT - No Variables Mode:**
 Do NOT create a variables section. Use hard-coded values directly in criterion text and tool_calls params. Write specific, concrete values directly into the criteria."""
-        
+
         criteria_item_3 = """3. **Use hard-coded values** - write specific values directly into criteria (e.g., "IP address is '10.0.187.159'" not "IP address is '{{ip_address}}'")"""
-        
+
         atomic_examples = """**CRITICAL - Atomic Factual Accuracy Criteria:**
 - WRONG: "The response correctly states the RAM (~1.7GB) and IP address (10.0.187.159)" - Mixes two values!
 - RIGHT: Create SEPARATE criteria:
   1. "The response correctly states RAM as ~1.7GB"
   2. "The response correctly states IP address as 10.0.187.159"
 - ONE value per factual accuracy criterion - no exceptions"""
-        
+
         json_example = """Return ONLY a JSON object with "criteria" key (NO variables section). Example format:
 {
   "criteria": [
@@ -1677,10 +1709,10 @@ Do NOT create a variables section. Use hard-coded values directly in criterion t
   ]
 }
 
-Note: 
+Note:
 - Extract actual tool names from the chat session
 - Use hard-coded values directly in criteria - do NOT use variable placeholders"""
-    
+
     return f"""Given the following chat session and dimensions, {count_instruction}.
 
 **Chat Session:**
@@ -1699,10 +1731,10 @@ When evaluating tool usage, create SEPARATE criteria for different tool categori
 
 1. **Required tools** (use `required` list) - Core/essential tools that MUST be called
    - Pass = full weight, Fail = 0
-   
+
 2. **Bonus tools** (use `optional` list only) - Nice-to-have tools
    - Pass = extra credit, Fail = 0 (no penalty for not calling)
-   
+
 3. **Penalty tools** (use `prohibited` list only) - Tools that should NOT be called
    - No violation = 0, Violation = negative score
 

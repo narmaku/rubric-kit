@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rubric-kit"
-version = "0.1.5"
+version = "0.1.6"
 description = "Generate high-quality Rubrics based on custom dimensions, descriptors, criteria and scoring system."
 readme = "README.md"
 license = "MIT"
@@ -53,6 +53,11 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
+    "types-PyYAML",
+    "types-tabulate",
 ]
 
 [project.urls]
@@ -72,4 +77,74 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+# =============================================================================
+# Ruff Configuration
+# =============================================================================
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort (import sorting)
+    "UP",     # pyupgrade
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+    "SIM108", # use ternary operator instead of if-else block
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["SIM115", "SIM117"]  # Allow open() without context manager in tests
+
+[tool.ruff.lint.isort]
+known-first-party = ["rubric_kit"]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# =============================================================================
+# Mypy Configuration
+# =============================================================================
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = false
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+ignore_missing_imports = true
+show_error_codes = true
+pretty = true
+# Relax checking for gradual adoption
+disable_error_code = [
+    "call-arg",      # Missing named arguments (pydantic defaults)
+    "arg-type",      # Argument type mismatches
+    "assignment",    # Incompatible assignment types
+    "index",         # Index access issues
+    "call-overload", # Overload resolution issues
+    "var-annotated", # Missing variable annotations
+    "operator",      # Unknown type calls
+    "dict-item",     # Dict entry type mismatches
+    "attr-defined",  # Attribute access on untyped modules (matplotlib)
+]
+# Note: Strict type checking can be enabled incrementally by removing
+# error codes from disable_error_code one by one.
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
 
