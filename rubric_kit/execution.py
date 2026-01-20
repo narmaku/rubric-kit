@@ -1,10 +1,13 @@
 """Judge execution strategies: sequential, parallel, and batched."""
 
-from typing import List, Dict, Any, Callable, Optional, Literal
+from typing import List, Dict, Any, Callable, Optional, Literal, TYPE_CHECKING
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 from rubric_kit.schema import JudgeConfig, Criterion, Dimension
+
+if TYPE_CHECKING:
+    from rubric_kit.metrics import MetricsAggregator
 
 
 def execute_judges(
@@ -16,7 +19,8 @@ def execute_judges(
     dimension: Optional[Dimension] = None,
     parsed_session: Optional[Any] = None,
     batch_size: int = 2,
-    timeout: int = 30
+    timeout: int = 30,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> List[Dict[str, Any]]:
     """
     Execute judges using specified execution strategy.
@@ -24,7 +28,7 @@ def execute_judges(
     Args:
         judges: List of judge configurations
         judge_function: Function to call for each judge evaluation
-                       Should have signature: (judge_config, criterion, chat_content, dimension, parsed_session) -> Dict
+                       Should have signature: (judge_config, criterion, chat_content, dimension, parsed_session, metrics) -> Dict
         execution_mode: Execution strategy ("sequential", "parallel", "batched")
         criterion: Criterion to evaluate (optional, passed to judge_function)
         chat_content: Chat session content to evaluate
@@ -32,6 +36,7 @@ def execute_judges(
         parsed_session: Optional pre-parsed chat session (optional, passed to judge_function)
         batch_size: Batch size for batched mode
         timeout: Timeout per judge call in seconds
+        metrics: Optional MetricsAggregator for tracking LLM calls
         
     Returns:
         List of evaluation results, one per judge, in same order as judges list.
@@ -46,13 +51,13 @@ def execute_judges(
     
     execution_strategies = {
         "sequential": lambda: _execute_sequential(
-            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout, metrics
         ),
         "parallel": lambda: _execute_parallel(
-            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout, metrics
         ),
         "batched": lambda: _execute_batched(
-            judges, judge_function, criterion, chat_content, dimension, parsed_session, batch_size, timeout
+            judges, judge_function, criterion, chat_content, dimension, parsed_session, batch_size, timeout, metrics
         ),
     }
     
@@ -84,14 +89,15 @@ def _execute_sequential(
     chat_content: str,
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> List[Dict[str, Any]]:
     """Execute judges one by one in sequence."""
     results = []
     
     for judge in judges:
         result = _call_judge_safe(
-            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout
+            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout, metrics
         )
         results.append(result)
     
@@ -105,11 +111,12 @@ def _execute_parallel(
     chat_content: str,
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> List[Dict[str, Any]]:
     """Execute all judges in parallel using asyncio."""
     return asyncio.run(_execute_parallel_async(
-        judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+        judges, judge_function, criterion, chat_content, dimension, parsed_session, timeout, metrics
     ))
 
 
@@ -120,7 +127,8 @@ async def _execute_parallel_async(
     chat_content: str,
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> List[Dict[str, Any]]:
     """Async helper for parallel execution."""
     loop = asyncio.get_event_loop()
@@ -135,7 +143,8 @@ async def _execute_parallel_async(
             chat_content,
             dimension,
             parsed_session,
-            timeout
+            timeout,
+            metrics
         )
         for judge in judges
     ]
@@ -151,7 +160,8 @@ def _execute_batched(
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
     batch_size: int,
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> List[Dict[str, Any]]:
     """Execute judges in batches."""
     results = []
@@ -159,7 +169,7 @@ def _execute_batched(
     for i in range(0, len(judges), batch_size):
         batch = judges[i:i + batch_size]
         batch_results = asyncio.run(_execute_parallel_async(
-            batch, judge_function, criterion, chat_content, dimension, parsed_session, timeout
+            batch, judge_function, criterion, chat_content, dimension, parsed_session, timeout, metrics
         ))
         results.extend(batch_results)
     
@@ -173,12 +183,13 @@ def _call_judge_with_timeout(
     chat_content: str,
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """Call judge function with timeout using ThreadPoolExecutor."""
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(
-            judge_function, judge, criterion, chat_content, dimension, parsed_session
+            judge_function, judge, criterion, chat_content, dimension, parsed_session, metrics
         )
         
         try:
@@ -194,12 +205,13 @@ def _call_judge_safe(
     chat_content: str,
     dimension: Optional[Dimension],
     parsed_session: Optional[Any],
-    timeout: int
+    timeout: int,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """Safely call judge function, catching all errors and returning standardized result."""
     try:
         result = _call_judge_with_timeout(
-            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout
+            judge_function, judge, criterion, chat_content, dimension, parsed_session, timeout, metrics
         )
         return _create_success_result(judge.name, result)
     except Exception as e:

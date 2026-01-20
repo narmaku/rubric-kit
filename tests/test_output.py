@@ -517,10 +517,13 @@ def test_convert_yaml_to_csv(sample_results):
         # Verify CSV was created
         assert os.path.exists(csv_path)
         
-        # Read and verify content
+        # Read and verify content (skip comment lines)
         with open(csv_path, 'r') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            lines = [line for line in f if not line.startswith('#')]
+        
+        import io
+        reader = csv.DictReader(io.StringIO(''.join(lines)))
+        rows = list(reader)
         
         assert len(rows) >= 3  # At least 3 results
         assert rows[0]["criterion_name"] == "fact_1"
@@ -575,4 +578,100 @@ def test_convert_yaml_to_json_missing_file():
     
     with pytest.raises(FileNotFoundError):
         convert_yaml_to_json("nonexistent.yaml", "output.json")
+
+
+def test_convert_yaml_to_json_always_includes_input(sample_results):
+    """Test convert_yaml_to_json always includes full input content."""
+    from rubric_kit.output import convert_yaml_to_json
+    
+    chat_content = "User: Test question?\nAssistant: Test answer."
+    
+    # Create source YAML file with input content (new structured format)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({
+            "results": sample_results,
+            "input": {
+                "type": "chat_session",
+                "source_file": "test.txt",
+                "chat_session": chat_content
+            }
+        }, f)
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+        json_path = f.name
+    
+    try:
+        convert_yaml_to_json(yaml_path, json_path)
+        
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Input content should always be included
+        assert "input" in data
+        assert "chat_session" in data["input"]
+        assert data["input"]["chat_session"] == chat_content
+    finally:
+        os.unlink(yaml_path)
+        os.unlink(json_path)
+
+
+def test_convert_yaml_to_csv_includes_header_comments(sample_results):
+    """Test convert_yaml_to_csv includes header comments with metadata and input summary."""
+    from rubric_kit.output import convert_yaml_to_csv
+    
+    chat_content = "User: Test question?\nAssistant: Test answer."
+    
+    # Create source YAML file (new structured format)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({
+            "results": sample_results,
+            "input": {
+                "type": "chat_session",
+                "source_file": "test.txt",
+                "chat_session": chat_content
+            },
+            "metadata": {
+                "timestamp": "2024-01-01T12:00:00"
+            },
+            "summary": {
+                "total_score": 6,
+                "max_score": 9,
+                "percentage": 66.7
+            }
+        }, f)
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        csv_path = f.name
+    
+    try:
+        convert_yaml_to_csv(yaml_path, csv_path)
+        
+        assert os.path.exists(csv_path)
+        
+        # Read and verify header comments
+        with open(csv_path, 'r') as f:
+            content = f.read()
+        
+        # Verify header comments are present
+        assert content.startswith("# Evaluation Report")
+        assert "# Input Type: chat_session" in content
+        assert "# Chat Session:" in content
+        assert "# Score:" in content
+        
+        # Also read as CSV to verify data
+        with open(csv_path, 'r') as f:
+            # Skip comment lines for CSV reader
+            lines = [line for line in f if not line.startswith('#')]
+        
+        import io
+        reader = csv.DictReader(io.StringIO(''.join(lines)))
+        rows = list(reader)
+        
+        # CSV should still have the results (3 results + 1 summary row)
+        assert len(rows) == 4
+    finally:
+        os.unlink(yaml_path)
+        os.unlink(csv_path)
 

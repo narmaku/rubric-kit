@@ -66,10 +66,14 @@ Examples:
     parser.add_argument('--no-table', action='store_true', help='Do not print results table to console')
     parser.add_argument('--report', dest='report', help='Path to generate PDF report (optional)')
     parser.add_argument('--report-title', dest='report_title', help='Custom title for the PDF report (optional)')
-    parser.add_argument('--include-input', action='store_true', dest='include_input', help='Include input content in output YAML (for rerun capability)')
     parser.add_argument('--judge-panel-config', help='Path to judge panel configuration YAML file (optional, creates single-judge panel if not provided)')
     parser.add_argument('--base-url', help='Base URL for OpenAI-compatible endpoint')
     parser.add_argument('--model', default='gpt-4', help='Model name (default: gpt-4). LiteLLM format: gpt-4, vertex_ai/gemini-2.5-flash, watsonx/llama-3, ollama/llama3')
+    
+    # Metrics options
+    parser.add_argument('--dry-run', action='store_true', help='Estimate costs without making LLM calls')
+    parser.add_argument('--no-metrics', action='store_true', help='Disable metrics collection in output')
+    parser.add_argument('--include-call-log', action='store_true', help='Include detailed per-call metrics log in output')
 
 
 def _add_generate_parser(subparsers) -> None:
@@ -118,6 +122,10 @@ Examples:
     guidelines_group = parser.add_mutually_exclusive_group()
     guidelines_group.add_argument('--guidelines', help='Specific guidelines or hints to guide rubric generation (e.g., "Focus on security aspects")')
     guidelines_group.add_argument('--guidelines-file', dest='guidelines_file', help='Path to file containing guidelines (for long or multi-line content, e.g., AI persona descriptions)')
+    
+    # Metrics options
+    parser.add_argument('--dry-run', action='store_true', help='Estimate costs without making LLM calls')
+    parser.add_argument('--no-metrics', action='store_true', help='Disable metrics collection in output')
 
 
 def _add_refine_parser(subparsers) -> None:
@@ -164,6 +172,9 @@ Examples:
     parser.add_argument('--base-url', help='Base URL for OpenAI-compatible endpoint')
     parser.add_argument('--model', default='gpt-4', help='Model name (default: gpt-4). LiteLLM format: gpt-4, vertex_ai/gemini-2.5-flash, watsonx/llama-3, ollama/llama3')
     parser.add_argument('--no-variables', action='store_true', dest='no_variables', help='Do not extract variables - use hard-coded values directly in criteria')
+    
+    # Metrics options
+    parser.add_argument('--no-metrics', action='store_true', help='Disable metrics collection in output')
 
 
 def _add_export_parser(subparsers) -> None:
@@ -177,7 +188,7 @@ Examples:
   # Export to PDF report
   %(prog)s results.yaml --format pdf --output report.pdf
   
-  # Export to CSV
+  # Export to CSV (includes metadata header)
   %(prog)s results.yaml --format csv --output results.csv
   
   # Export to JSON
@@ -220,7 +231,6 @@ Examples:
     input_group.add_argument('--from-qna', dest='qna_file', help='Path to new Q&A YAML file (overrides embedded/original input)')
     input_group.add_argument('--from-chat-session', dest='chat_session_file', help='Path to new chat session file (overrides embedded/original input)')
     
-    parser.add_argument('--include-input', action='store_true', dest='include_input', help='Include input content in output YAML')
     parser.add_argument('--report', help='Path to generate PDF report (optional)')
     parser.add_argument('--report-title', dest='report_title', help='Custom title for the PDF report (optional, overrides original)')
     parser.add_argument('--no-table', action='store_true', help='Do not print results table to console')

@@ -319,3 +319,113 @@ def test_export_evaluation_pdf_with_judges_panel_summary(sample_results, sample_
         if os.path.exists(pdf_path):
             os.unlink(pdf_path)
 
+
+def test_export_evaluation_pdf_includes_chat_session(sample_results, sample_metadata, sample_rubric, sample_judge_panel):
+    """Test exporting PDF always includes chat session content."""
+    from rubric_kit.pdf_export import export_evaluation_pdf
+    
+    chat_content = "User: What is the capital of France?\nAssistant: The capital of France is Paris."
+    
+    # Create temporary YAML file with input content (new structured format)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({
+            "results": sample_results,
+            "rubric": sample_rubric,
+            "judge_panel": sample_judge_panel,
+            "input": {
+                "type": "chat_session",
+                "source_file": "test_chat.txt",
+                "chat_session": chat_content
+            },
+            "metadata": sample_metadata
+        }, f)
+    
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        pdf_path = f.name
+    
+    try:
+        export_evaluation_pdf(yaml_path, pdf_path)
+        
+        # Verify PDF was created
+        assert os.path.exists(pdf_path)
+        assert os.path.getsize(pdf_path) > 0
+    finally:
+        if os.path.exists(yaml_path):
+            os.unlink(yaml_path)
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+
+
+def test_export_evaluation_pdf_includes_qna(sample_results, sample_metadata, sample_rubric, sample_judge_panel):
+    """Test exporting PDF always includes Q&A content."""
+    from rubric_kit.pdf_export import export_evaluation_pdf
+    
+    # Create temporary YAML file with Q&A input (new structured format)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({
+            "results": sample_results,
+            "rubric": sample_rubric,
+            "judge_panel": sample_judge_panel,
+            "input": {
+                "type": "qna",
+                "source_file": "test_qna.yaml",
+                "question": "What is the capital of France?",
+                "answer": "The capital of France is Paris.",
+                "context": "Geography quiz"
+            },
+            "metadata": sample_metadata
+        }, f)
+    
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        pdf_path = f.name
+    
+    try:
+        export_evaluation_pdf(yaml_path, pdf_path)
+        
+        # Verify PDF was created
+        assert os.path.exists(pdf_path)
+        assert os.path.getsize(pdf_path) > 0
+    finally:
+        if os.path.exists(yaml_path):
+            os.unlink(yaml_path)
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+
+
+def test_export_evaluation_pdf_without_input_content(sample_results, sample_metadata, sample_rubric, sample_judge_panel):
+    """Test exporting PDF gracefully handles missing input content."""
+    from rubric_kit.pdf_export import export_evaluation_pdf
+    
+    # Create temporary YAML file without input content
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml_path = f.name
+        yaml.dump({
+            "results": sample_results,
+            "rubric": sample_rubric,
+            "judge_panel": sample_judge_panel,
+            "input": {
+                "type": "chat_session",
+                "source_file": "nonexistent_file.txt"
+                # No content field
+            },
+            "metadata": sample_metadata
+        }, f)
+    
+    with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+        pdf_path = f.name
+    
+    try:
+        # Should not crash even when content is missing
+        export_evaluation_pdf(yaml_path, pdf_path)
+        
+        # Verify PDF was created
+        assert os.path.exists(pdf_path)
+        assert os.path.getsize(pdf_path) > 0
+    finally:
+        if os.path.exists(yaml_path):
+            os.unlink(yaml_path)
+        if os.path.exists(pdf_path):
+            os.unlink(pdf_path)
+
