@@ -12,6 +12,8 @@ Rubric framework. Create, refine, and apply evaluation rubrics powered by AI.
 - **PDF Reports** - Comprehensive reports with charts and breakdowns
 - **Export Formats** - YAML (source of truth), PDF, CSV, JSON
 - **Self-Contained Outputs** - Re-run evaluations from previous results
+- **Cost Estimation** - Dry-run mode to estimate costs before running evaluations
+- **Metrics Tracking** - Token usage, latency, and cost tracking per LLM call
 
 ## Installation
 
@@ -111,6 +113,14 @@ judges:
 
 Use `rubric-kit <command> --help` for detailed options.
 
+### Common Options
+
+| Flag | Commands | Description |
+|------|----------|-------------|
+| `--dry-run` | evaluate, generate | Estimate costs without making LLM calls |
+| `--no-metrics` | evaluate, generate, refine | Disable metrics collection in output |
+| `--include-call-log` | evaluate | Include detailed per-call metrics in output |
+
 ## YAML Formats
 
 See [`examples/`](examples/) for complete format examples:
@@ -195,7 +205,15 @@ summary:
 
 rubric: { ... }       # Full rubric for reference
 judge_panel: { ... }  # Judge configuration used
-metadata: { ... }     # Timestamp, source files
+input: { ... }        # Input content (Q&A or chat session)
+metadata:
+  timestamp: 2025-01-20T10:30:00
+  metrics:            # LLM usage metrics (unless --no-metrics)
+    summary:
+      total_calls: 5
+      prompt_tokens: 2500
+      completion_tokens: 800
+      estimated_cost_usd: 0.0425
 ```
 
 ## Development

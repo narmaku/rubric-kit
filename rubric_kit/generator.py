@@ -2,14 +2,18 @@
 
 import json
 import re
+import time
 import yaml
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from pathlib import Path
 
 import litellm
 
 from rubric_kit.schema import Rubric, Dimension, Criterion
+
+if TYPE_CHECKING:
+    from rubric_kit.metrics import MetricsAggregator
 from rubric_kit.prompts import (
     GENERATOR_CONFIG,
     build_dimension_generation_prompt,
@@ -502,7 +506,13 @@ class RubricGenerator:
     - Local Ollama: model="ollama/llama3"
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4", base_url: Optional[str] = None):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4",
+        base_url: Optional[str] = None,
+        metrics: Optional["MetricsAggregator"] = None
+    ):
         """
         Initialize RubricGenerator.
         
@@ -514,10 +524,12 @@ class RubricGenerator:
                    - "vertex_ai/gemini-2.5-flash" for Google Vertex AI
                    - "watsonx/meta-llama/llama-3-8b-instruct" for IBM WatsonX
             base_url: Optional base URL for OpenAI-compatible endpoints
+            metrics: Optional MetricsAggregator for tracking LLM call metrics
         """
         self.api_key = api_key
         self.model = model
         self.base_url = base_url
+        self.metrics = metrics
     
     def generate_dimensions(
         self,
@@ -543,7 +555,7 @@ class RubricGenerator:
             context=qa_input.context,
             guidelines=guidelines
         )
-        response = self._call_llm(prompt)
+        response = self._call_llm(prompt, call_type="generate_dimensions")
         return _convert_to_dimensions(response)
     
     def generate_criteria(
@@ -579,7 +591,7 @@ class RubricGenerator:
             use_variables=use_variables,
             guidelines=guidelines
         )
-        response = self._call_llm(prompt, categories=category_hints)
+        response = self._call_llm(prompt, call_type="generate_criteria")
         
         # Handle new format with variables
         if isinstance(response, dict) and "criteria" in response:
@@ -666,7 +678,7 @@ class RubricGenerator:
             variables=rubric.variables if use_variables else None,
             use_variables=use_variables
         )
-        response = self._call_llm(prompt)
+        response = self._call_llm(prompt, call_type="refine_rubric")
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
@@ -708,7 +720,7 @@ class RubricGenerator:
             variables=rubric.variables if use_variables else None,
             use_variables=use_variables
         )
-        response = self._call_llm(prompt)
+        response = self._call_llm(prompt, call_type="refine_rubric_with_qa")
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
@@ -749,7 +761,7 @@ class RubricGenerator:
             variables=rubric.variables if use_variables else None,
             use_variables=use_variables
         )
-        response = self._call_llm(prompt)
+        response = self._call_llm(prompt, call_type="refine_rubric_with_chat")
         
         dimensions = _convert_to_dimensions(response["dimensions"])
         criteria = _convert_to_criteria(response["criteria"])
@@ -783,7 +795,7 @@ class RubricGenerator:
             context=chat_input.context,
             guidelines=guidelines
         )
-        response = self._call_llm(prompt)
+        response = self._call_llm(prompt, call_type="generate_dimensions_from_chat")
         return _convert_to_dimensions(response)
     
     def generate_criteria_from_chat(
@@ -821,7 +833,7 @@ class RubricGenerator:
             use_variables=use_variables,
             guidelines=guidelines
         )
-        response = self._call_llm(prompt, categories=category_hints)
+        response = self._call_llm(prompt, call_type="generate_criteria_from_chat")
         
         # Handle new format with variables
         if isinstance(response, dict) and "criteria" in response:
@@ -882,12 +894,13 @@ class RubricGenerator:
         
         return Rubric(dimensions=dims, criteria=criteria, variables=variables)
     
-    def _call_llm(self, prompt: str, **kwargs) -> Any:
+    def _call_llm(self, prompt: str, call_type: str = "generate", **kwargs) -> Any:
         """
         Call LLM via LiteLLM and parse JSON response.
         
         Args:
             prompt: Prompt to send to LLM
+            call_type: Type of call for metrics tracking (e.g., 'generate_dimensions')
             **kwargs: Additional context passed to this method (currently unused)
             
         Returns:
@@ -920,7 +933,20 @@ class RubricGenerator:
         if self.base_url:
             api_params["api_base"] = self.base_url
         
+        # Track timing for metrics
+        start_time = time.time()
         response = litellm.completion(**api_params)
+        latency = time.time() - start_time
+        
+        # Record metrics if aggregator is configured
+        if self.metrics is not None:
+            self.metrics.record_call(
+                call_type=call_type,
+                model=self.model,
+                usage=response.usage,
+                latency=latency,
+                response=response
+            )
         
         # Check if response was truncated
         finish_reason = response.choices[0].finish_reason

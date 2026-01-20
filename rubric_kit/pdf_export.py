@@ -680,6 +680,234 @@ def _escape_xml(text: str) -> str:
     return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
 
+def _create_input_section(input_data: Optional[Dict[str, Any]], story: List) -> None:
+    """Create Input Content section displaying Q&A or chat session content."""
+    if not input_data:
+        return
+    
+    input_type = input_data.get("type", "unknown")
+    
+    # Check if we have content in the new structured format
+    has_qna_data = "question" in input_data or "answer" in input_data
+    has_chat_data = "chat_session" in input_data
+    has_legacy_content = "content" in input_data
+    
+    if not has_qna_data and not has_chat_data and not has_legacy_content:
+        # Try to read from source file
+        source_file = input_data.get("source_file")
+        if source_file and os.path.exists(source_file):
+            try:
+                with open(source_file, 'r', encoding='utf-8') as f:
+                    if input_type == "qna":
+                        # Parse and add to input_data
+                        qa_content = yaml.safe_load(f)
+                        if isinstance(qa_content, dict):
+                            input_data.update(qa_content)
+                            has_qna_data = True
+                    else:
+                        input_data["chat_session"] = f.read()
+                        has_chat_data = True
+            except Exception:
+                return
+        else:
+            return
+    
+    if not has_qna_data and not has_chat_data and not has_legacy_content:
+        return
+    
+    styles = getSampleStyleSheet()
+    
+    heading_style = ParagraphStyle(
+        'InputHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        textColor=COLORS["primary"],
+        spaceAfter=12,
+        spaceBefore=20
+    )
+    
+    subheading_style = ParagraphStyle(
+        'InputSubHeading',
+        parent=styles['Heading3'],
+        fontSize=12,
+        textColor=COLORS["secondary"],
+        spaceAfter=8,
+        spaceBefore=12
+    )
+    
+    content_style = ParagraphStyle(
+        'InputContent',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=12,
+        spaceAfter=8,
+        leftIndent=10,
+        rightIndent=10,
+        backColor=COLORS["row_alt"],
+        borderPadding=8
+    )
+    
+    qa_label_style = ParagraphStyle(
+        'QALabel',
+        parent=styles['Normal'],
+        fontSize=10,
+        fontName='Helvetica-Bold',
+        textColor=COLORS["header_bg"],
+        spaceAfter=4,
+        spaceBefore=8
+    )
+    
+    qa_content_style = ParagraphStyle(
+        'QAContent',
+        parent=styles['Normal'],
+        fontSize=9,
+        leading=12,
+        spaceAfter=12,
+        leftIndent=15,
+        rightIndent=10,
+        backColor=COLORS["row_alt"],
+        borderPadding=6
+    )
+    
+    story.append(PageBreak())
+    story.append(Paragraph("Input Content", heading_style))
+    
+    source_file = input_data.get("source_file", "")
+    
+    # Display source info
+    if source_file:
+        source_info = f"<i>Source: {_escape_xml(str(source_file))} ({input_type})</i>"
+        story.append(Paragraph(source_info, content_style))
+    
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Handle Q&A format
+    if input_type == "qna" and has_qna_data:
+        _render_single_qa(input_data, story, qa_label_style, qa_content_style)
+    elif has_chat_data:
+        # New format: chat_session key
+        _render_chat_content(input_data["chat_session"], story, subheading_style, content_style)
+    elif has_legacy_content:
+        # Legacy format: content key
+        content = input_data["content"]
+        if input_type == "qna":
+            _render_qna_content(content, story, subheading_style, qa_label_style, qa_content_style)
+        else:
+            _render_chat_content(content, story, subheading_style, content_style)
+
+
+def _render_qna_content(content: str, story: List, subheading_style, label_style, content_style) -> None:
+    """Render Q&A YAML content in a structured format (legacy format with 'content' string)."""
+    try:
+        qa_data = yaml.safe_load(content)
+        
+        if isinstance(qa_data, dict):
+            # Single Q&A pair
+            _render_single_qa(qa_data, story, label_style, content_style)
+        elif isinstance(qa_data, list):
+            # Multiple Q&A pairs
+            for i, qa in enumerate(qa_data, 1):
+                if isinstance(qa, dict):
+                    story.append(Paragraph(f"<b>Q&A Pair {i}</b>", label_style))
+                    _render_single_qa(qa, story, label_style, content_style)
+                    story.append(Spacer(1, 0.1*inch))
+    except Exception:
+        # Fall back to raw content display
+        escaped = _escape_xml(content)
+        story.append(Paragraph(escaped, content_style))
+
+
+def _format_content_for_pdf(text: str) -> str:
+    """Format text content for PDF display, preserving newlines and indentation."""
+    escaped = _escape_xml(str(text))
+    
+    # Process line by line to preserve leading indentation
+    lines = escaped.split('\n')
+    formatted_lines = []
+    for line in lines:
+        # Count leading spaces and convert to non-breaking spaces
+        stripped = line.lstrip(' ')
+        leading_spaces = len(line) - len(stripped)
+        if leading_spaces > 0:
+            # Use &nbsp; for leading spaces to preserve indentation
+            line = '&nbsp;' * leading_spaces + stripped
+        formatted_lines.append(line)
+    
+    # Join with <br/> for proper line breaks in PDF
+    return '<br/>'.join(formatted_lines)
+
+
+def _render_single_qa(qa_data: Dict[str, Any], story: List, label_style, content_style) -> None:
+    """Render a single Q&A pair with proper multiline and code block handling."""
+    styles = getSampleStyleSheet()
+    
+    # Code style for content that looks like code (has code fences or indentation)
+    code_style = ParagraphStyle(
+        'QACode',
+        parent=content_style,
+        fontName='Courier',
+        fontSize=8,
+        leading=10,
+        backColor=colors.HexColor('#f5f5f5'),
+        borderColor=colors.HexColor('#dddddd'),
+        borderWidth=0.5,
+        borderPadding=8
+    )
+    
+    # Question
+    question = qa_data.get("question", "")
+    if question:
+        story.append(Paragraph("Question:", label_style))
+        story.append(Spacer(1, 0.05*inch))
+        formatted_q = _format_content_for_pdf(question)
+        story.append(Paragraph(formatted_q, content_style))
+        story.append(Spacer(1, 0.15*inch))
+    
+    # Context (if present)
+    context = qa_data.get("context", "")
+    if context:
+        story.append(Paragraph("Context:", label_style))
+        story.append(Spacer(1, 0.05*inch))
+        formatted_ctx = _format_content_for_pdf(context)
+        # Truncate very long context
+        if len(formatted_ctx) > 2000:
+            formatted_ctx = formatted_ctx[:2000] + "... [truncated]"
+        story.append(Paragraph(formatted_ctx, content_style))
+        story.append(Spacer(1, 0.15*inch))
+    
+    # Answer
+    answer = qa_data.get("answer", "")
+    if answer:
+        story.append(Paragraph("Answer:", label_style))
+        story.append(Spacer(1, 0.1*inch))  # Add spacing between label and content
+        formatted_a = _format_content_for_pdf(answer)
+        # Use code style if answer contains code fences or looks like code
+        if '```' in answer or answer.strip().startswith(('def ', 'class ', '#!/', 'import ', 'from ')):
+            story.append(Paragraph(formatted_a, code_style))
+        else:
+            story.append(Paragraph(formatted_a, content_style))
+
+
+def _render_chat_content(content: str, story: List, subheading_style, content_style) -> None:
+    """Render chat session content."""
+    story.append(Paragraph("Chat Session", subheading_style))
+    
+    # Split content into manageable chunks for better rendering
+    lines = content.split('\n')
+    
+    # Process content in chunks to avoid memory issues with very large sessions
+    chunk_size = 100
+    for i in range(0, len(lines), chunk_size):
+        chunk = '\n'.join(lines[i:i+chunk_size])
+        escaped = _escape_xml(chunk)
+        # Replace newlines with <br/> for PDF rendering
+        escaped = escaped.replace('\n', '<br/>')
+        story.append(Paragraph(escaped, content_style))
+        
+        if i + chunk_size < len(lines):
+            story.append(Spacer(1, 0.05*inch))
+
+
 def _create_rubric_appendix(rubric_data: Optional[Dict[str, Any]], story: List) -> None:
     """Create Rubric Appendix section with Dimensions and Criteria."""
     if not rubric_data:
@@ -819,6 +1047,7 @@ def export_evaluation_pdf(input_file: str, output_file: str) -> None:
     metadata = data.get("metadata", {})
     rubric_data = data.get("rubric")
     judge_panel = data.get("judge_panel")
+    input_data = data.get("input")
     
     if not results:
         raise ValueError("No results found in input file")
@@ -846,6 +1075,9 @@ def export_evaluation_pdf(input_file: str, output_file: str) -> None:
     # LLM Judges Panel Summary
     _create_judges_panel_summary(judge_panel, results, story)
     
+    # Input Content section (after judges summary, before charts)
+    _create_input_section(input_data, story)
+    
     # Charts
     if len(results) > 0:
         try:
@@ -871,7 +1103,7 @@ def export_evaluation_pdf(input_file: str, output_file: str) -> None:
             chart_img2 = Image(BytesIO(chart_data2), width=5*inch, height=3*inch)
             story.append(chart_img2)
             story.append(PageBreak())
-        except Exception as e:
+        except Exception:
             # If chart generation fails, continue without charts
             pass
     

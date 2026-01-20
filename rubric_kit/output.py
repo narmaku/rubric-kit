@@ -453,9 +453,80 @@ def _load_yaml_data(input_path: str) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
+def _truncate_text(text: str, max_length: int = 200) -> str:
+    """Truncate text to max length, adding ellipsis if needed."""
+    if not text:
+        return ""
+    text = text.replace('\n', ' ').replace('\r', ' ')
+    if len(text) <= max_length:
+        return text
+    return text[:max_length - 3] + "..."
+
+
+def _format_csv_header_comments(data: Dict[str, Any]) -> List[str]:
+    """
+    Generate CSV header comment lines with metadata and input summary.
+    
+    Returns list of comment lines (starting with #).
+    """
+    lines = ["# Evaluation Report"]
+    lines.append("#")
+    
+    # Metadata
+    metadata = data.get("metadata", {})
+    if metadata.get("timestamp"):
+        lines.append(f"# Evaluated: {metadata['timestamp']}")
+    if metadata.get("rubric_source_file"):
+        lines.append(f"# Rubric: {metadata['rubric_source_file']}")
+    
+    # Summary
+    summary = data.get("summary", {})
+    if summary:
+        score = summary.get("total_score", 0)
+        max_score = summary.get("max_score", 0)
+        pct = summary.get("percentage", 0)
+        lines.append(f"# Score: {score}/{max_score} ({pct}%)")
+    
+    lines.append("#")
+    
+    # Input content
+    input_data = data.get("input", {})
+    input_type = input_data.get("type", "unknown")
+    source_file = input_data.get("source_file", "")
+    
+    if source_file:
+        lines.append(f"# Input Source: {source_file}")
+    lines.append(f"# Input Type: {input_type}")
+    
+    if input_type == "qna":
+        question = input_data.get("question", "")
+        answer = input_data.get("answer", "")
+        context = input_data.get("context", "")
+        
+        if question:
+            lines.append(f"# Question: {_truncate_text(question, 150)}")
+        if context:
+            lines.append(f"# Context: {_truncate_text(context, 100)}")
+        if answer:
+            lines.append(f"# Answer: {_truncate_text(answer, 300)}")
+    else:
+        chat_session = input_data.get("chat_session", "")
+        if chat_session:
+            lines.append(f"# Chat Session: {_truncate_text(chat_session, 400)}")
+    
+    lines.append("#")
+    lines.append("# " + "=" * 60)
+    lines.append("#")
+    
+    return lines
+
+
 def convert_yaml_to_csv(input_path: str, output_path: str) -> None:
     """
     Convert evaluation results from YAML to CSV format.
+    
+    Includes header comments with metadata and input summary for complete,
+    self-contained exports.
     
     Args:
         input_path: Path to input YAML file
@@ -464,14 +535,38 @@ def convert_yaml_to_csv(input_path: str, output_path: str) -> None:
     data = _load_yaml_data(input_path)
     results = data.get("results", [])
     
+    # Generate header comments
+    header_comments = _format_csv_header_comments(data)
+    
+    # Prepare results data
+    expanded_results, fieldnames = _prepare_data_for_csv(results)
+    
     # Include summary if present
     include_summary = "summary" in data
-    write_csv(results, output_path, include_summary=include_summary)
+    
+    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+        # Write header comments
+        for line in header_comments:
+            f.write(line + '\n')
+        
+        # Write CSV data
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        
+        for result in expanded_results:
+            writer.writerow(result)
+        
+        if include_summary:
+            summary = _calculate_summary(results)
+            summary_row = _create_summary_row(fieldnames, summary)
+            writer.writerow(summary_row)
 
 
 def convert_yaml_to_json(input_path: str, output_path: str) -> None:
     """
     Convert evaluation results from YAML to JSON format.
+    
+    Always includes full input content for complete, self-contained exports.
     
     Args:
         input_path: Path to input YAML file

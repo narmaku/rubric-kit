@@ -93,7 +93,76 @@ def sample_evaluation_yaml():
         },
         "input": {
             "type": "chat_session",
-            "source_file": "test.txt"
+            "source_file": "test.txt",
+            "chat_session": "User: Test question?\nAssistant: Test answer."
+        },
+        "metadata": {
+            "timestamp": "2024-01-01T12:00:00",
+            "rubric_source_file": "test.yaml",
+            "judge_panel_source_file": None
+        }
+    }
+    
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        yaml.dump(data, f)
+        temp_path = f.name
+    
+    yield temp_path
+    os.unlink(temp_path)
+
+
+@pytest.fixture
+def sample_evaluation_yaml_with_qna():
+    """Create a sample evaluation YAML file with Q&A input (new structured format)."""
+    data = {
+        "results": [
+            {
+                "criterion_name": "fact_1",
+                "category": "Output",
+                "dimension": "factual_correctness",
+                "result": "pass",
+                "score": 3,
+                "max_score": 3,
+                "reason": "Correct"
+            }
+        ],
+        "summary": {
+            "total_score": 3,
+            "max_score": 3,
+            "percentage": 100.0
+        },
+        "rubric": {
+            "dimensions": [
+                {
+                    "name": "factual_correctness",
+                    "description": "Test correctness",
+                    "grading_type": "binary",
+                    "scores": None,
+                    "pass_above": None
+                }
+            ],
+            "criteria": [
+                {
+                    "name": "fact_1",
+                    "category": "Output",
+                    "dimension": "factual_correctness",
+                    "criterion": "Check fact 1",
+                    "weight": 3,
+                    "tool_calls": None
+                }
+            ]
+        },
+        "judge_panel": {
+            "judges": [{"name": "default", "model": "gpt-4", "base_url": None}],
+            "execution": {"mode": "sequential", "batch_size": 2, "timeout": 30},
+            "consensus": {"mode": "unanimous", "threshold": 1, "on_no_consensus": "fail"}
+        },
+        "input": {
+            "type": "qna",
+            "source_file": "qna.yaml",
+            "question": "What is the capital of France?",
+            "answer": "The capital of France is Paris.",
+            "context": "Geography quiz"
         },
         "metadata": {
             "timestamp": "2024-01-01T12:00:00",
@@ -303,6 +372,46 @@ class TestEvaluateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
     
+    @patch('rubric_kit.main.evaluate_rubric_with_panel')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_evaluate_always_includes_input_content(self, mock_eval_llm, sample_rubric_file, sample_chat_session_file):
+        """Test that evaluate subcommand always includes input content in output."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_eval_llm.return_value = {
+            "fact_1": {"type": "binary", "passes": True},
+            "useful_1": {"type": "score", "score": 3}
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            # Note: No --include-input flag - content should be included by default
+            sys.argv = ['rubric-kit', 'evaluate', '--from-chat-session', sample_chat_session_file, 
+                       '--rubric-file', sample_rubric_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            # Verify input content is included in new structured format
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            assert "input" in data
+            assert data["input"]["type"] == "chat_session"
+            # New format uses chat_session key for chat sessions
+            assert "chat_session" in data["input"]
+            assert data["input"]["chat_session"] is not None
+            assert len(data["input"]["chat_session"]) > 0
+            # Verify it contains the actual chat session content
+            assert "Test question" in data["input"]["chat_session"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
     def test_evaluate_with_missing_api_key(self, sample_rubric_file, sample_chat_session_file):
         """Test evaluate subcommand without API key."""
         from rubric_kit.main import main
@@ -481,6 +590,409 @@ dimensions:
     
     yield temp_path
     os.unlink(temp_path)
+
+
+class TestGenerateMetadata:
+    """Test generate command metadata and metrics output."""
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_includes_metadata(self, mock_generator_class, sample_qa_file):
+        """Test that generate command includes metadata in output YAML."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metadata is included
+            assert "metadata" in data
+            assert "timestamp" in data["metadata"]
+            assert "operation" in data["metadata"]
+            assert data["metadata"]["operation"] == "generate"
+            assert "model" in data["metadata"]
+            assert "source_file" in data["metadata"]
+            assert "source_type" in data["metadata"]
+            assert data["metadata"]["source_type"] == "qna"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_includes_metrics_by_default(self, mock_generator_class, sample_qa_file):
+        """Test that generate command includes metrics by default."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metrics are included in metadata
+            assert "metadata" in data
+            assert "metrics" in data["metadata"]
+            assert "summary" in data["metadata"]["metrics"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_no_metrics_excludes_metrics_but_keeps_metadata(self, mock_generator_class, sample_qa_file):
+        """Test that --no-metrics excludes metrics but keeps other metadata."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, 
+                       '--output-file', output_path, '--no-metrics']
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metadata is still included
+            assert "metadata" in data
+            assert "timestamp" in data["metadata"]
+            assert "operation" in data["metadata"]
+            assert data["metadata"]["operation"] == "generate"
+            assert "model" in data["metadata"]
+            
+            # Verify metrics are NOT included
+            assert "metrics" not in data["metadata"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_from_chat_includes_metadata(self, mock_generator_class, sample_chat_session_file):
+        """Test that generate from chat includes metadata with correct source_type."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric_from_chat.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'generate', '--from-chat-session', sample_chat_session_file, 
+                       '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            assert "metadata" in data
+            assert data["metadata"]["source_type"] == "chat_session"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_generate_metadata_includes_options(self, mock_generator_class, sample_qa_file):
+        """Test that generate metadata includes generation options."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.generate_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'generate', '--from-qna', sample_qa_file, 
+                       '--output-file', output_path,
+                       '--num-dimensions', '3',
+                       '--num-criteria', '5']
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            assert "metadata" in data
+            assert "options" in data["metadata"]
+            assert data["metadata"]["options"]["num_dimensions"] == 3
+            assert data["metadata"]["options"]["num_criteria"] == 5
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+
+class TestRefineMetadata:
+    """Test refine command metadata and metrics output."""
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_includes_metadata(self, mock_generator_class, sample_rubric_file):
+        """Test that refine command includes metadata in output YAML."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, 
+                       '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metadata is included
+            assert "metadata" in data
+            assert "timestamp" in data["metadata"]
+            assert "operation" in data["metadata"]
+            assert data["metadata"]["operation"] == "refine"
+            assert "model" in data["metadata"]
+            assert "source_rubric_file" in data["metadata"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_includes_metrics_by_default(self, mock_generator_class, sample_rubric_file):
+        """Test that refine command includes metrics by default."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, 
+                       '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metrics are included in metadata
+            assert "metadata" in data
+            assert "metrics" in data["metadata"]
+            assert "summary" in data["metadata"]["metrics"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_no_metrics_excludes_metrics_but_keeps_metadata(self, mock_generator_class, sample_rubric_file):
+        """Test that --no-metrics excludes metrics but keeps other metadata."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, 
+                       '--output-file', output_path, '--no-metrics']
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            # Verify metadata is still included
+            assert "metadata" in data
+            assert "timestamp" in data["metadata"]
+            assert "operation" in data["metadata"]
+            assert data["metadata"]["operation"] == "refine"
+            assert "model" in data["metadata"]
+            
+            # Verify metrics are NOT included
+            assert "metrics" not in data["metadata"]
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+    
+    @patch('rubric_kit.main.RubricGenerator')
+    @patch.dict(os.environ, {'OPENAI_API_KEY': 'test_key'})
+    def test_refine_with_qa_context_includes_context_in_metadata(self, mock_generator_class, sample_rubric_file, sample_qa_file):
+        """Test that refine with Q&A context includes context info in metadata."""
+        from rubric_kit.main import main
+        import sys
+        
+        mock_generator = Mock()
+        mock_generator_class.return_value = mock_generator
+        
+        mock_rubric = Rubric(
+            dimensions=[
+                Dimension(name="test", description="Test", grading_type="binary")
+            ],
+            criteria=[
+                Criterion(name="test_1", category="Output", weight=3, dimension="test", criterion="Test")
+            ]
+        )
+        mock_generator.refine_rubric_with_qa.return_value = mock_rubric
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            output_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'refine', '--rubric-file', sample_rubric_file, 
+                       '--from-qna', sample_qa_file,
+                       '--output-file', output_path]
+            
+            result = main()
+            
+            assert result == 0
+            
+            with open(output_path, 'r') as f:
+                data = yaml.safe_load(f)
+            
+            assert "metadata" in data
+            assert "context_file" in data["metadata"]
+            assert "context_type" in data["metadata"]
+            assert data["metadata"]["context_type"] == "qna"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
 
 
 class TestGenerateWithGuidelines:
@@ -1042,12 +1554,7 @@ class TestRerunCommand:
         from rubric_kit.main import main
         import sys
         
-        # Add embedded input content to the fixture
-        with open(sample_evaluation_yaml, 'r') as f:
-            data = yaml.safe_load(f)
-        data["input"]["content"] = "User: Test question?\nAssistant: Test answer."
-        with open(sample_evaluation_yaml, 'w') as f:
-            yaml.dump(data, f)
+        # The sample_evaluation_yaml fixture already has embedded chat_session content
         
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True}
@@ -1156,10 +1663,13 @@ class TestExportCommand:
             assert result == 0
             assert os.path.exists(csv_path)
             
-            # Verify CSV content
+            # Verify CSV content (skip comment lines)
             with open(csv_path, 'r') as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
+                lines = [line for line in f if not line.startswith('#')]
+            
+            import io
+            reader = csv.DictReader(io.StringIO(''.join(lines)))
+            rows = list(reader)
             assert len(rows) >= 1
             assert rows[0]["criterion_name"] == "fact_1"
         finally:
@@ -1214,6 +1724,84 @@ class TestExportCommand:
         
         # Should exit with error due to missing required argument
         assert exc_info.value.code != 0
+    
+    def test_export_to_pdf_always_includes_input(self, sample_evaluation_yaml):
+        """Test export to PDF always includes input content section."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.pdf', delete=False) as f:
+            pdf_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'pdf', 
+                       '--output', pdf_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(pdf_path)
+            assert os.path.getsize(pdf_path) > 0
+        finally:
+            if os.path.exists(pdf_path):
+                os.unlink(pdf_path)
+    
+    def test_export_to_json_always_includes_input(self, sample_evaluation_yaml):
+        """Test export to JSON always includes full input content."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            json_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'json', 
+                       '--output', json_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(json_path)
+            
+            # Verify JSON content includes full input
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+            assert "input" in data
+            assert "chat_session" in data["input"]
+            assert data["input"]["chat_session"] is not None
+        finally:
+            if os.path.exists(json_path):
+                os.unlink(json_path)
+    
+    def test_export_to_csv_includes_header_comments(self, sample_evaluation_yaml):
+        """Test export to CSV includes header comments with metadata and input summary."""
+        from rubric_kit.main import main
+        import sys
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+            csv_path = f.name
+        
+        try:
+            sys.argv = ['rubric-kit', 'export', sample_evaluation_yaml, '--format', 'csv', 
+                       '--output', csv_path]
+            
+            result = main()
+            
+            assert result == 0
+            assert os.path.exists(csv_path)
+            
+            # Verify CSV has header comments
+            with open(csv_path, 'r') as f:
+                content = f.read()
+            
+            # Should have comment header lines
+            assert content.startswith("# Evaluation Report")
+            assert "# Input Type:" in content
+            # Should also have actual CSV data
+            assert "criterion_name" in content
+        finally:
+            if os.path.exists(csv_path):
+                os.unlink(csv_path)
 
 
 def test_cli_help():

@@ -207,12 +207,14 @@ class TestRubricGenerator:
             }
         ]
         
-        called_with_categories = []
+        called_with_call_type = []
         
         def mock_llm_call(*args, **kwargs):
-            # Capture the categories passed to LLM
-            if 'categories' in kwargs:
-                called_with_categories.append(kwargs['categories'])
+            # Capture the call_type passed to LLM
+            if len(args) >= 2:
+                called_with_call_type.append(args[1])  # call_type is second positional arg
+            elif 'call_type' in kwargs:
+                called_with_call_type.append(kwargs['call_type'])
             return mock_response
         
         monkeypatch.setattr(generator, "_call_llm", mock_llm_call)
@@ -226,8 +228,9 @@ class TestRubricGenerator:
         
         assert len(criteria) == 1
         assert criteria[0].category == "Accuracy"
-        # Verify categories were passed to LLM
-        assert len(called_with_categories) > 0
+        # Verify call_type was passed to LLM
+        assert len(called_with_call_type) > 0
+        assert called_with_call_type[0] == "generate_criteria"
         assert variables is None  # Old format doesn't have variables
     
     def test_generate_rubric_full_workflow(self, generator, simple_qa, monkeypatch):

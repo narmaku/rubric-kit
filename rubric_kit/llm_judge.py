@@ -4,11 +4,15 @@ import json
 import re
 import os
 import random
-from typing import Dict, Any, Optional, Tuple, List
+import time
+from typing import Dict, Any, Optional, Tuple, List, TYPE_CHECKING
 from pathlib import Path
 import litellm
 
 from rubric_kit.schema import Rubric, Criterion, Dimension, JudgePanelConfig, JudgeConfig
+
+if TYPE_CHECKING:
+    from rubric_kit.metrics import MetricsAggregator
 from rubric_kit.prompts import (
     EVALUATOR_CONFIG,
     TOOL_CALL_EVALUATOR_CONFIG,
@@ -158,7 +162,8 @@ def _prepare_tool_call_evaluation(
 def _evaluate_tool_calls_hybrid(
     criterion: Criterion,
     parsed_session: Optional[ChatSession],
-    judge_config: JudgeConfig
+    judge_config: JudgeConfig,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Tuple[ToolBreakdown, bool, float]:
     """
     Evaluate tool calls using hybrid approach: programmatic + LLM.
@@ -185,7 +190,10 @@ def _evaluate_tool_calls_hybrid(
     param_prompt = build_param_validation_prompt(breakdown)
     if param_prompt:
         try:
-            response = _call_llm(judge_config, param_prompt, EVALUATOR_CONFIG)
+            response = _call_llm(
+                judge_config, param_prompt, EVALUATOR_CONFIG,
+                metrics=metrics, call_type="param_validation", context_id=criterion.name
+            )
             validation_results = parse_param_validation_response(response)
             apply_param_validation_results(breakdown, validation_results)
         except Exception as e:
@@ -195,7 +203,10 @@ def _evaluate_tool_calls_hybrid(
     # Step 3: LLM summary generation
     summary_prompt = build_summary_prompt(breakdown)
     try:
-        response = _call_llm(judge_config, summary_prompt, EVALUATOR_CONFIG)
+        response = _call_llm(
+            judge_config, summary_prompt, EVALUATOR_CONFIG,
+            metrics=metrics, call_type="summary_generation", context_id=criterion.name
+        )
         breakdown.summary = parse_summary_response(response)
     except Exception as e:
         print(f"Warning: Summary generation failed: {e}")
@@ -211,7 +222,8 @@ def _evaluate_tool_criterion_with_breakdown(
     criterion: Criterion,
     chat_content: str,
     dimension: Optional[Dimension],
-    parsed_session: Optional[ChatSession]
+    parsed_session: Optional[ChatSession],
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a tool call criterion using hybrid approach.
@@ -222,7 +234,7 @@ def _evaluate_tool_criterion_with_breakdown(
     - tool_breakdown: detailed per-tool results
     """
     breakdown, passes, overall_score = _evaluate_tool_calls_hybrid(
-        criterion, parsed_session, judge_config
+        criterion, parsed_session, judge_config, metrics=metrics
     )
     
     return {
@@ -262,7 +274,10 @@ def _prepare_evaluation_prompt(
 def _call_llm(
     judge_config: JudgeConfig,
     prompt: str,
-    config: Any
+    config: Any,
+    metrics: Optional["MetricsAggregator"] = None,
+    call_type: str = "evaluate_criterion",
+    context_id: Optional[str] = None
 ) -> str:
     """Call LLM API via LiteLLM and return response content.
     
@@ -274,6 +289,14 @@ def _call_llm(
     - "vertex_ai/gemini-2.5-flash" -> Google Vertex AI
     - "watsonx/meta-llama/llama-3-8b-instruct" -> IBM WatsonX
     - "ollama/llama3" -> Local Ollama
+    
+    Args:
+        judge_config: Configuration for the judge
+        prompt: Prompt to send to LLM
+        config: LLM config object (from prompts.py)
+        metrics: Optional MetricsAggregator for tracking
+        call_type: Type of call for metrics (e.g., 'evaluate_criterion')
+        context_id: Optional context identifier (e.g., criterion name)
     """
     # Build API call parameters, using judge-specific values if provided,
     # otherwise falling back to config defaults
@@ -304,11 +327,25 @@ def _call_llm(
     if judge_config.base_url:
         api_params["api_base"] = judge_config.base_url
     
+    # Track timing for metrics
+    start_time = time.time()
     try:
         response = litellm.completion(**api_params)
     except Exception as e:
         raise ValueError(
             f"Judge evaluation failed: API call error for {judge_config.model}: {str(e)}"
+        )
+    latency = time.time() - start_time
+    
+    # Record metrics if aggregator is configured
+    if metrics is not None:
+        metrics.record_call(
+            call_type=call_type,
+            model=judge_config.model,
+            usage=response.usage,
+            latency=latency,
+            context_id=context_id,
+            response=response
         )
     
     content = response.choices[0].message.content
@@ -354,7 +391,8 @@ def _single_judge_evaluate(
     criterion: Criterion,
     chat_content: str,
     dimension: Optional[Dimension],
-    parsed_session: Optional[ChatSession] = None
+    parsed_session: Optional[ChatSession] = None,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a criterion using a single judge.
@@ -368,6 +406,7 @@ def _single_judge_evaluate(
         chat_content: The chat session content
         dimension: Optional dimension for score-based criteria
         parsed_session: Optional pre-parsed chat session for structured evaluation
+        metrics: Optional MetricsAggregator for tracking LLM calls
         
     Returns:
         Evaluation result dictionary
@@ -375,14 +414,18 @@ def _single_judge_evaluate(
     # Use hybrid approach for tool call criteria
     if criterion.tool_calls:
         return _evaluate_tool_criterion_with_breakdown(
-            judge_config, criterion, chat_content, dimension, parsed_session
+            judge_config, criterion, chat_content, dimension, parsed_session,
+            metrics=metrics
         )
     
     # Standard LLM-only evaluation for non-tool criteria
     prompt, evaluation_type, config = _prepare_evaluation_prompt(
         criterion, chat_content, dimension, parsed_session
     )
-    llm_response = _call_llm(judge_config, prompt, config)
+    llm_response = _call_llm(
+        judge_config, prompt, config,
+        metrics=metrics, call_type="evaluate_criterion", context_id=criterion.name
+    )
     return _parse_evaluation_response(llm_response, evaluation_type)
 
 
@@ -482,7 +525,8 @@ def evaluate_criterion_with_panel(
     chat_content: str,
     dimension: Optional[Dimension],
     panel_config: JudgePanelConfig,
-    parsed_session: Optional[ChatSession] = None
+    parsed_session: Optional[ChatSession] = None,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """
     Evaluate a single criterion using a judge panel.
@@ -493,6 +537,7 @@ def evaluate_criterion_with_panel(
         dimension: Dimension for score-based criteria (optional)
         panel_config: Judge panel configuration
         parsed_session: Optional pre-parsed chat session for structured evaluation
+        metrics: Optional MetricsAggregator for tracking LLM calls
         
     Returns:
         Evaluation result dictionary with consensus information:
@@ -510,7 +555,8 @@ def evaluate_criterion_with_panel(
         dimension=dimension,
         parsed_session=parsed_session,
         batch_size=panel_config.execution.batch_size,
-        timeout=panel_config.execution.timeout
+        timeout=panel_config.execution.timeout,
+        metrics=metrics
     )
     
     _check_judge_errors(judge_results)
@@ -606,7 +652,8 @@ def _evaluate_criterion_safe(
     rubric: Rubric,
     chat_content: str,
     panel_config: JudgePanelConfig,
-    parsed_session: Optional[ChatSession]
+    parsed_session: Optional[ChatSession],
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Any]:
     """Evaluate a single criterion, validating dimension exists."""
     dimension = rubric.get_dimension(criterion.dimension)
@@ -620,7 +667,8 @@ def _evaluate_criterion_safe(
         chat_content=chat_content,
         dimension=dimension,
         panel_config=panel_config,
-        parsed_session=parsed_session
+        parsed_session=parsed_session,
+        metrics=metrics
     )
 
 
@@ -628,7 +676,8 @@ def evaluate_rubric_with_panel(
     rubric: Rubric,
     chat_session_file: str,
     panel_config: JudgePanelConfig,
-    use_parser: bool = True
+    use_parser: bool = True,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Evaluate all criteria in a rubric using a judge panel.
@@ -638,6 +687,7 @@ def evaluate_rubric_with_panel(
         chat_session_file: Path to the chat session file
         panel_config: Judge panel configuration
         use_parser: Whether to pre-parse the chat session for structured evaluation (default: True)
+        metrics: Optional MetricsAggregator for tracking LLM calls
         
     Returns:
         Dictionary mapping criterion names to evaluation results
@@ -648,7 +698,7 @@ def evaluate_rubric_with_panel(
     evaluations = {}
     for criterion in rubric.criteria:
         evaluations[criterion.name] = _evaluate_criterion_safe(
-            criterion, rubric, chat_content, panel_config, parsed_session
+            criterion, rubric, chat_content, panel_config, parsed_session, metrics=metrics
         )
     
     return evaluations
@@ -670,7 +720,8 @@ def _format_qa_content(qa_input: Any) -> str:
 def evaluate_rubric_with_panel_from_qa(
     rubric: Rubric,
     qna_file: str,
-    panel_config: JudgePanelConfig
+    panel_config: JudgePanelConfig,
+    metrics: Optional["MetricsAggregator"] = None
 ) -> Dict[str, Dict[str, Any]]:
     """
     Evaluate all criteria in a rubric using a judge panel, from a Q&A YAML file.
@@ -679,6 +730,7 @@ def evaluate_rubric_with_panel_from_qa(
         rubric: The rubric to evaluate
         qna_file: Path to Q&A YAML file (must contain question, answer, optional context)
         panel_config: Judge panel configuration
+        metrics: Optional MetricsAggregator for tracking LLM calls
         
     Returns:
         Dictionary mapping criterion names to evaluation results
@@ -692,7 +744,7 @@ def evaluate_rubric_with_panel_from_qa(
     evaluations = {}
     for criterion in rubric.criteria:
         evaluations[criterion.name] = _evaluate_criterion_safe(
-            criterion, rubric, chat_content, panel_config, parsed_session
+            criterion, rubric, chat_content, panel_config, parsed_session, metrics=metrics
         )
     
     return evaluations
