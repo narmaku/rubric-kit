@@ -343,6 +343,45 @@ class TestArenaOutputStructure:
             assert "percentage" in cdata["summary"]
 
 
+class TestGenerateContestantId:
+    """Test contestant ID generation helper."""
+
+    def test_generates_sequential_id_with_basename(self):
+        """Test that ID follows contestant-NNN-basename format."""
+        from rubric_kit.arena import _generate_contestant_id
+
+        result = _generate_contestant_id(0, "/some/path/result_coding_001.yaml")
+
+        assert result == "contestant-001-result-coding-001"
+
+    def test_sequential_numbering(self):
+        """Test that index produces correct zero-padded number."""
+        from rubric_kit.arena import _generate_contestant_id
+
+        assert _generate_contestant_id(0, "file_a.yaml").startswith("contestant-001-")
+        assert _generate_contestant_id(1, "file_b.yaml").startswith("contestant-002-")
+        assert _generate_contestant_id(9, "file_c.yaml").startswith("contestant-010-")
+
+    def test_strips_output_prefix(self):
+        """Test that 'output_' prefix is stripped from basename."""
+        from rubric_kit.arena import _generate_contestant_id
+
+        result = _generate_contestant_id(0, "output_model_a.yaml")
+
+        assert result == "contestant-001-model-a"
+
+    def test_same_basename_different_index_produces_unique_ids(self):
+        """Test that identical filenames at different indices produce unique IDs."""
+        from rubric_kit.arena import _generate_contestant_id
+
+        id1 = _generate_contestant_id(0, "/dir_a/result_coding_001.yaml")
+        id2 = _generate_contestant_id(1, "/dir_b/result_coding_001.yaml")
+
+        assert id1 != id2
+        assert id1 == "contestant-001-result-coding-001"
+        assert id2 == "contestant-002-result-coding-001"
+
+
 class TestCombineOutputsToArena:
     """Test combining multiple output files into arena format."""
 
@@ -452,6 +491,46 @@ class TestCombineOutputsToArena:
 
         with pytest.raises(ValueError, match="missing 'results' section"):
             combine_outputs_to_arena([str(bad_file)])
+
+    def test_combine_outputs_with_duplicate_basenames(self, tmp_path):
+        """Test that files with identical basenames produce unique contestants."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        output_data = {
+            "results": [{"criterion_name": "c1", "dimension": "d1", "score": 3, "max_score": 3}],
+            "summary": {"total_score": 3, "max_score": 3, "percentage": 100.0},
+            "rubric": {"dimensions": [], "criteria": []},
+            "judge_panel": {"judges": []},
+            "metadata": {"report_title": "Same Name"},
+        }
+
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        file_a = dir_a / "result_coding_001.yaml"
+        file_b = dir_b / "result_coding_001.yaml"
+
+        with open(file_a, "w") as f:
+            yaml.dump(output_data, f)
+        with open(file_b, "w") as f:
+            yaml.dump(output_data, f)
+
+        result = combine_outputs_to_arena([str(file_a), str(file_b)])
+
+        assert len(result["contestants"]) == 2
+        assert len(result["rankings"]) == 2
+
+    def test_combine_outputs_ids_use_sequential_format(self, sample_output_files):
+        """Test that contestant IDs follow the contestant-NNN-basename format."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        result = combine_outputs_to_arena(sample_output_files)
+        contestant_ids = list(result["contestants"].keys())
+
+        assert contestant_ids[0] == "contestant-001-model-a"
+        assert contestant_ids[1] == "contestant-002-model-b"
 
 
 class TestArenaFromOutputsCLI:

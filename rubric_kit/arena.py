@@ -137,6 +137,21 @@ def _substitute_tool_calls(tool_calls: ToolCalls, variables: dict[str, str]) -> 
     )
 
 
+def _generate_contestant_id(index: int, filename: str) -> str:
+    """Generate a unique contestant ID from a 1-based index and filename.
+
+    Args:
+        index: Zero-based index of the contestant in the input list.
+        filename: Full path or basename of the output file.
+
+    Returns:
+        ID in the format ``contestant-NNN-sanitized-basename``.
+    """
+    basename = os.path.splitext(os.path.basename(filename))[0]
+    sanitized = basename.replace("output_", "").replace("_", "-")
+    return f"contestant-{index + 1:03d}-{sanitized}"
+
+
 def combine_outputs_to_arena(
     output_files: list[str], arena_name: str = "Combined Arena"
 ) -> dict[str, Any]:
@@ -160,9 +175,9 @@ def combine_outputs_to_arena(
         if not data.get("results"):
             raise ValueError(f"File missing 'results' section: {output_file}")
 
-        basename = os.path.splitext(os.path.basename(output_file))[0]
-        contestant_id = basename.replace("output_", "").replace("_", "-")
+        contestant_id = _generate_contestant_id(idx, output_file)
         metadata = data.get("metadata", {})
+        basename = os.path.splitext(os.path.basename(output_file))[0]
         contestant_name = metadata.get("report_title", basename)
         input_info = data.get("input", {})
         summary = data.get("summary", {})
