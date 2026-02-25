@@ -25,8 +25,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from rubric_kit.generator import (
-    ChatSessionInput,
-    QAInput,
     RubricGenerator,
     parse_chat_session,
     parse_dimensions_file,
@@ -47,6 +45,7 @@ from rubric_kit.schema import (
     Rubric,
 )
 from rubric_kit.validator import load_judge_panel_config, load_rubric
+
 
 logger = logging.getLogger("rubric_kit")
 
