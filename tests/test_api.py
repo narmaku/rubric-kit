@@ -585,3 +585,209 @@ class TestBuildCriterionResults:
 
         results = _build_criterion_results([])
         assert results == []
+
+
+# =============================================================================
+# evaluate() API Function Tests
+# =============================================================================
+
+
+class TestEvaluate:
+    """Tests for the evaluate() public API function."""
+
+    def _mock_evaluations(self):
+        """Return mock evaluations as produced by llm_judge."""
+        return {
+            "fact_check": {
+                "type": "binary",
+                "passes": True,
+                "reason": "Factually correct.",
+                "consensus_reached": True,
+                "consensus_count": 1,
+            },
+            "quality_check": {
+                "type": "score",
+                "score": 3,
+                "reason": "Excellent quality.",
+                "consensus_reached": True,
+                "consensus_count": 1,
+            },
+        }
+
+    def test_evaluate_chat_session_from_file(
+        self, simple_rubric, single_judge_panel, tmp_path
+    ):
+        """Evaluate a chat session file returns EvaluationResult."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import EvaluationResult, evaluate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: What is Python?\nAssistant: A programming language.")
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=simple_rubric,
+                input_file=str(chat_file),
+                input_type="chat_session",
+                panel_config=single_judge_panel,
+                track_metrics=False,
+            )
+
+        assert isinstance(result, EvaluationResult)
+        assert len(result.criteria_results) == 2
+        assert result.summary.total_score == 6
+        assert result.summary.max_score == 6
+        assert result.summary.percentage == 100.0
+        assert result.input_type == "chat_session"
+        assert result.input_source == str(chat_file)
+        assert result.rubric is simple_rubric
+        assert result.panel_config is single_judge_panel
+        assert result.metrics is None
+
+    def test_evaluate_qna_from_file(self, simple_rubric, single_judge_panel, tmp_path):
+        """Evaluate a Q&A file returns EvaluationResult."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import evaluate
+
+        qna_file = tmp_path / "qna.yaml"
+        qna_file.write_text("question: What is Python?\nanswer: A programming language.")
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel_from_qa",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=simple_rubric,
+                input_file=str(qna_file),
+                input_type="qna",
+                panel_config=single_judge_panel,
+                track_metrics=False,
+            )
+
+        assert result.input_type == "qna"
+        assert len(result.criteria_results) == 2
+
+    def test_evaluate_with_rubric_path(
+        self, sample_rubric_yaml, single_judge_panel, tmp_path
+    ):
+        """Evaluate accepts a rubric file path."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import evaluate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: Hello\nAssistant: Hi!")
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=sample_rubric_yaml,
+                input_file=str(chat_file),
+                input_type="chat_session",
+                panel_config=single_judge_panel,
+                track_metrics=False,
+            )
+
+        assert len(result.rubric.dimensions) == 2
+
+    def test_evaluate_with_input_content(self, simple_rubric, single_judge_panel):
+        """Evaluate accepts inline content string instead of file."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import evaluate
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=simple_rubric,
+                input_content="User: Hello\nAssistant: Hi!",
+                input_type="chat_session",
+                panel_config=single_judge_panel,
+                track_metrics=False,
+            )
+
+        assert result.input_source == "<in-memory>"
+        assert len(result.criteria_results) == 2
+
+    def test_evaluate_with_metrics(self, simple_rubric, single_judge_panel, tmp_path):
+        """Evaluate tracks metrics when track_metrics=True."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import evaluate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: Hello\nAssistant: Hi!")
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=simple_rubric,
+                input_file=str(chat_file),
+                input_type="chat_session",
+                panel_config=single_judge_panel,
+                track_metrics=True,
+            )
+
+        # Metrics aggregator was created but no real LLM calls were made
+        # (mocked), so summary will have 0 calls
+        assert result.metrics is not None
+
+    def test_evaluate_default_panel(self, simple_rubric, tmp_path):
+        """Evaluate creates default single-judge panel when none provided."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import evaluate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: Hello\nAssistant: Hi!")
+
+        with patch(
+            "rubric_kit.api.evaluate_rubric_with_panel",
+            return_value=self._mock_evaluations(),
+        ):
+            result = evaluate(
+                rubric=simple_rubric,
+                input_file=str(chat_file),
+                input_type="chat_session",
+                model="gpt-4o",
+                track_metrics=False,
+            )
+
+        assert len(result.panel_config.judges) == 1
+        assert result.panel_config.judges[0].model == "gpt-4o"
+
+    def test_evaluate_missing_input_raises(self, simple_rubric, single_judge_panel):
+        """Evaluate raises ValueError when no input is provided."""
+        from rubric_kit.api import evaluate
+
+        with pytest.raises(ValueError, match="Either input_file or input_content"):
+            evaluate(
+                rubric=simple_rubric,
+                panel_config=single_judge_panel,
+            )
+
+    def test_evaluate_both_inputs_raises(self, simple_rubric, single_judge_panel, tmp_path):
+        """Evaluate raises ValueError when both inputs are provided."""
+        from rubric_kit.api import evaluate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("content")
+
+        with pytest.raises(ValueError, match="Provide either input_file or input_content"):
+            evaluate(
+                rubric=simple_rubric,
+                input_file=str(chat_file),
+                input_content="content",
+                panel_config=single_judge_panel,
+            )

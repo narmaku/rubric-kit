@@ -25,6 +25,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from rubric_kit.generator import parse_dimensions_file
+from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.metrics import MetricsAggregator
+from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
 from rubric_kit.schema import (
     ConsensusConfig,
     Dimension,
@@ -284,3 +287,113 @@ def _build_criterion_results(
         List of CriterionResult objects.
     """
     return [CriterionResult(**r) for r in raw_results]
+
+
+# =============================================================================
+# Public API Functions
+# =============================================================================
+
+
+def evaluate(
+    *,
+    rubric: Rubric | str | Path,
+    input_file: str | Path | None = None,
+    input_content: str | None = None,
+    input_type: Literal["chat_session", "qna"] = "chat_session",
+    panel_config: JudgePanelConfig | str | Path | None = None,
+    model: str = "gpt-4",
+    base_url: str | None = None,
+    variables_file: str | Path | None = None,
+    track_metrics: bool = True,
+    include_call_log: bool = False,
+) -> EvaluationResult:
+    """Evaluate input against a rubric using an LLM judge panel.
+
+    Args:
+        rubric: A Rubric object, or path to a rubric YAML file.
+        input_file: Path to input file (chat session or Q&A YAML).
+        input_content: Raw input content string (alternative to input_file).
+            Exactly one of input_file or input_content must be provided.
+        input_type: Type of input: ``"chat_session"`` or ``"qna"``.
+        panel_config: A JudgePanelConfig object, or path to panel config YAML.
+            If None, creates a single-judge panel using ``model``.
+        model: Model to use when panel_config is not provided.
+        base_url: Custom API base URL when panel_config is not provided.
+        variables_file: Path to external variables file for rubric substitution.
+        track_metrics: Whether to track LLM call metrics.
+        include_call_log: Whether to include detailed call log in metrics.
+
+    Returns:
+        EvaluationResult with typed criteria results and score summary.
+
+    Raises:
+        ValueError: If neither input_file nor input_content is provided,
+            or if both are provided.
+        FileNotFoundError: If rubric file, input file, or panel config not found.
+        RubricValidationError: If rubric is invalid.
+    """
+    import os
+    import tempfile
+
+    # Resolve inputs
+    resolved_rubric = _resolve_rubric(rubric, variables_file=variables_file)
+    resolved_panel = _resolve_panel_config(panel_config, model=model, base_url=base_url)
+    file_path, content = _resolve_input(input_file, input_content)
+
+    # Create metrics aggregator
+    metrics = MetricsAggregator(include_call_log=include_call_log) if track_metrics else None
+
+    # Determine input source for result metadata
+    input_source = str(file_path) if file_path else "<in-memory>"
+
+    # Run evaluation
+    temp_file = None
+    try:
+        if content is not None:
+            # Write content to temp file for core functions that require file paths
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(content)
+                temp_file = f.name
+            eval_file = temp_file
+        else:
+            eval_file = file_path
+
+        logger.info("Evaluating %s from %s", input_type.replace("_", " "), input_source)
+
+        if input_type == "qna":
+            evaluations = evaluate_rubric_with_panel_from_qa(
+                resolved_rubric, eval_file, resolved_panel, metrics=metrics
+            )
+        else:
+            evaluations = evaluate_rubric_with_panel(
+                resolved_rubric, eval_file, resolved_panel, metrics=metrics
+            )
+    finally:
+        if temp_file is not None:
+            os.unlink(temp_file)
+
+    # Process scores
+    results = evaluate_rubric(resolved_rubric, evaluations)
+    total_score, max_score = calculate_total_score(results)
+    percentage = calculate_percentage_score(results)
+
+    # Build typed result
+    criteria_results = _build_criterion_results(results)
+    summary = ScoreSummary(
+        total_score=total_score,
+        max_score=max_score,
+        percentage=round(percentage, 1),
+    )
+    metrics_summary = metrics.get_summary() if metrics else None
+
+    return EvaluationResult(
+        criteria_results=criteria_results,
+        summary=summary,
+        rubric=resolved_rubric,
+        panel_config=resolved_panel,
+        input_type=input_type,
+        input_source=input_source,
+        metrics=metrics_summary,
+    )
