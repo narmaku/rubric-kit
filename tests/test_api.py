@@ -1049,3 +1049,123 @@ class TestRefine:
         assert result.rubric is simple_rubric
         # Original rubric was loaded from file
         assert isinstance(result.original_rubric, Rubric)
+
+
+# =============================================================================
+# export() API Function Tests
+# =============================================================================
+
+
+class TestExport:
+    """Tests for the export() public API function."""
+
+    def test_export_to_csv(self, tmp_path):
+        """Export evaluation results to CSV."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import ExportResult, export
+
+        input_yaml = tmp_path / "results.yaml"
+        input_yaml.write_text("results: []")
+        output_csv = tmp_path / "results.csv"
+
+        with patch("rubric_kit.api.convert_yaml_to_csv") as mock_csv:
+            result = export(
+                input_file=str(input_yaml),
+                output_file=str(output_csv),
+                format="csv",
+            )
+
+        assert isinstance(result, ExportResult)
+        assert result.format == "csv"
+        assert result.output_path == str(output_csv)
+        assert result.success is True
+        mock_csv.assert_called_once_with(str(input_yaml), str(output_csv))
+
+    def test_export_to_json(self, tmp_path):
+        """Export evaluation results to JSON."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import export
+
+        input_yaml = tmp_path / "results.yaml"
+        input_yaml.write_text("results: []")
+        output_json = tmp_path / "results.json"
+
+        with patch("rubric_kit.api.convert_yaml_to_json") as mock_json:
+            result = export(
+                input_file=str(input_yaml),
+                output_file=str(output_json),
+                format="json",
+            )
+
+        assert result.format == "json"
+        mock_json.assert_called_once_with(str(input_yaml), str(output_json))
+
+    def test_export_to_pdf(self, tmp_path):
+        """Export evaluation results to PDF."""
+        from unittest.mock import patch
+
+        from rubric_kit.api import export
+
+        input_yaml = tmp_path / "results.yaml"
+        input_yaml.write_text("results: []")
+        output_pdf = tmp_path / "report.pdf"
+
+        with patch("rubric_kit.api.export_evaluation_pdf") as mock_pdf:
+            result = export(
+                input_file=str(input_yaml),
+                output_file=str(output_pdf),
+                format="pdf",
+            )
+
+        assert result.format == "pdf"
+        mock_pdf.assert_called_once_with(str(input_yaml), str(output_pdf))
+
+
+# =============================================================================
+# dry_run_evaluate() API Function Tests
+# =============================================================================
+
+
+class TestDryRunEvaluate:
+    """Tests for the dry_run_evaluate() public API function."""
+
+    def test_basic(self, simple_rubric):
+        """Dry run returns cost estimates without LLM calls."""
+        from rubric_kit.api import DryRunResult, dry_run_evaluate
+
+        result = dry_run_evaluate(
+            rubric=simple_rubric,
+            model="gpt-4",
+        )
+
+        assert isinstance(result, DryRunResult)
+        assert result.total_calls > 0
+        assert result.prompt_tokens > 0
+        assert "gpt-4" in result.model_estimates
+        assert result.cost_minimal >= 0
+        assert result.cost_conservative >= result.cost_minimal
+        assert result.cost_worst_case >= result.cost_conservative
+
+    def test_with_panel_config(self, simple_rubric, single_judge_panel):
+        """Dry run uses models from panel config."""
+        from rubric_kit.api import dry_run_evaluate
+
+        result = dry_run_evaluate(
+            rubric=simple_rubric,
+            panel_config=single_judge_panel,
+        )
+
+        assert "gpt-4" in result.model_estimates
+
+    def test_with_rubric_path(self, sample_rubric_yaml):
+        """Dry run accepts rubric file path."""
+        from rubric_kit.api import dry_run_evaluate
+
+        result = dry_run_evaluate(
+            rubric=sample_rubric_yaml,
+            model="gpt-4",
+        )
+
+        assert result.total_calls > 0

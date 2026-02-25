@@ -33,8 +33,11 @@ from rubric_kit.generator import (
     parse_qa_input,
 )
 from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
-from rubric_kit.metrics import MetricsAggregator
+from rubric_kit.metrics import MetricsAggregator, estimate_cost, estimate_tokens
+from rubric_kit.output import convert_yaml_to_csv, convert_yaml_to_json
+from rubric_kit.pdf_export import export_evaluation_pdf
 from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
+from rubric_kit.prompts import EVALUATOR_CONFIG, build_binary_criterion_prompt
 from rubric_kit.schema import (
     ConsensusConfig,
     Dimension,
@@ -626,4 +629,120 @@ def refine(
         had_feedback=feedback is not None,
         had_context=has_context,
         metrics=metrics_summary,
+    )
+
+
+def export(
+    *,
+    input_file: str | Path,
+    output_file: str | Path,
+    format: Literal["pdf", "csv", "json"],
+) -> ExportResult:
+    """Export evaluation results to a different format.
+
+    Args:
+        input_file: Path to evaluation YAML output file.
+        output_file: Path for the exported file.
+        format: Output format: ``"pdf"``, ``"csv"``, or ``"json"``.
+
+    Returns:
+        ExportResult indicating success and output path.
+
+    Raises:
+        ValueError: If format is not supported.
+        FileNotFoundError: If input file not found.
+    """
+    in_path = str(input_file)
+    out_path = str(output_file)
+
+    if format == "pdf":
+        export_evaluation_pdf(in_path, out_path)
+    elif format == "csv":
+        convert_yaml_to_csv(in_path, out_path)
+    elif format == "json":
+        convert_yaml_to_json(in_path, out_path)
+    else:
+        raise ValueError(f"Unsupported export format: {format}")
+
+    return ExportResult(format=format, output_path=out_path)
+
+
+def dry_run_evaluate(
+    *,
+    rubric: Rubric | str | Path,
+    panel_config: JudgePanelConfig | str | Path | None = None,
+    model: str = "gpt-4",
+    variables_file: str | Path | None = None,
+) -> DryRunResult:
+    """Estimate the cost of an evaluation without making LLM calls.
+
+    Args:
+        rubric: A Rubric object or path to rubric YAML file.
+        panel_config: A JudgePanelConfig object or path to config file.
+            If None, uses a single-judge panel with ``model``.
+        model: Model to use for cost estimation when panel_config is None.
+        variables_file: Path to external variables file.
+
+    Returns:
+        DryRunResult with cost estimates per model.
+    """
+    resolved_rubric = _resolve_rubric(rubric, variables_file=variables_file)
+    resolved_panel = _resolve_panel_config(panel_config, model=model)
+
+    judge_models = [judge.model for judge in resolved_panel.judges]
+
+    # Cost estimation constants
+    minimal_tokens = 400
+    config = EVALUATOR_CONFIG
+    max_tokens = config.max_tokens
+    conservative_tokens = int(max_tokens * 0.1)
+
+    estimates: dict[str, dict[str, Any]] = {}
+
+    for criterion in resolved_rubric.criteria:
+        prompt = build_binary_criterion_prompt(
+            criterion, "[Sample chat content for estimation]"
+        )
+        messages = [
+            {"role": "system", "content": config.system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        for judge_model in judge_models:
+            if judge_model not in estimates:
+                estimates[judge_model] = {
+                    "calls": 0,
+                    "prompt_tokens": 0,
+                    "cost_minimal": 0.0,
+                    "cost_conservative": 0.0,
+                    "cost_worst_case": 0.0,
+                }
+
+            prompt_tokens = estimate_tokens(judge_model, messages)
+            estimates[judge_model]["calls"] += 1
+            estimates[judge_model]["prompt_tokens"] += prompt_tokens
+            estimates[judge_model]["cost_minimal"] += estimate_cost(
+                judge_model, prompt_tokens, minimal_tokens
+            )
+            estimates[judge_model]["cost_conservative"] += estimate_cost(
+                judge_model, prompt_tokens, conservative_tokens
+            )
+            estimates[judge_model]["cost_worst_case"] += estimate_cost(
+                judge_model, prompt_tokens, max_tokens
+            )
+
+    # Calculate totals
+    total_calls = sum(m["calls"] for m in estimates.values())
+    total_prompt_tokens = sum(m["prompt_tokens"] for m in estimates.values())
+    total_minimal = sum(m["cost_minimal"] for m in estimates.values())
+    total_conservative = sum(m["cost_conservative"] for m in estimates.values())
+    total_worst = sum(m["cost_worst_case"] for m in estimates.values())
+
+    return DryRunResult(
+        total_calls=total_calls,
+        prompt_tokens=total_prompt_tokens,
+        cost_minimal=total_minimal,
+        cost_conservative=total_conservative,
+        cost_worst_case=total_worst,
+        model_estimates=estimates,
     )
