@@ -24,7 +24,14 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from rubric_kit.generator import parse_dimensions_file
+from rubric_kit.generator import (
+    ChatSessionInput,
+    QAInput,
+    RubricGenerator,
+    parse_chat_session,
+    parse_dimensions_file,
+    parse_qa_input,
+)
 from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
 from rubric_kit.metrics import MetricsAggregator
 from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
@@ -395,5 +402,228 @@ def evaluate(
         panel_config=resolved_panel,
         input_type=input_type,
         input_source=input_source,
+        metrics=metrics_summary,
+    )
+
+
+def generate(
+    *,
+    input_file: str | Path | None = None,
+    input_content: str | None = None,
+    input_type: Literal["chat_session", "qna"] = "qna",
+    model: str = "gpt-4",
+    base_url: str | None = None,
+    num_dimensions: int | None = None,
+    num_criteria: int | None = None,
+    category_hints: list[str] | None = None,
+    dimensions: list[Dimension] | str | Path | None = None,
+    use_variables: bool = True,
+    guidelines: str | None = None,
+    track_metrics: bool = True,
+) -> GenerationResult:
+    """Generate a rubric from input content using an LLM.
+
+    Args:
+        input_file: Path to input file (Q&A or chat session).
+        input_content: Raw input content string (alternative to input_file).
+        input_type: Type of input: ``"qna"`` or ``"chat_session"``.
+        model: LLM model to use for generation.
+        base_url: Custom API base URL.
+        num_dimensions: Number of dimensions to generate (None for auto).
+        num_criteria: Number of criteria to generate (None for auto).
+        category_hints: Optional category names to guide generation.
+        dimensions: Pre-defined dimensions (list or path to YAML file).
+        use_variables: Whether to extract variables from content.
+        guidelines: Optional guidelines text to guide generation.
+        track_metrics: Whether to track LLM call metrics.
+
+    Returns:
+        GenerationResult containing the generated Rubric.
+
+    Raises:
+        ValueError: If neither input_file nor input_content is provided.
+        FileNotFoundError: If input file or dimensions file not found.
+    """
+    import tempfile
+
+    file_path, content = _resolve_input(input_file, input_content)
+    resolved_dims = _resolve_dimensions(dimensions)
+
+    # Create metrics aggregator
+    metrics = MetricsAggregator() if track_metrics else None
+
+    # Create generator
+    generator = RubricGenerator(model=model, base_url=base_url, metrics=metrics)
+
+    # Determine input source for result metadata
+    input_source = str(file_path) if file_path else "<in-memory>"
+
+    # Handle inline content by writing to temp file for parsers
+    temp_file = None
+    try:
+        if content is not None:
+            suffix = ".yaml" if input_type == "qna" else ".txt"
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=suffix, delete=False, encoding="utf-8"
+            ) as f:
+                f.write(content)
+                temp_file = f.name
+            parse_path = temp_file
+        else:
+            parse_path = str(file_path)
+
+        # Parse input and generate rubric
+        if input_type == "qna":
+            qa_input = parse_qa_input(parse_path)
+            rubric = generator.generate_rubric(
+                qa_input,
+                num_dimensions=num_dimensions,
+                num_criteria=num_criteria,
+                category_hints=category_hints,
+                dimensions=resolved_dims,
+                use_variables=use_variables,
+                guidelines=guidelines,
+            )
+        else:
+            chat_input = parse_chat_session(parse_path)
+            rubric = generator.generate_rubric_from_chat(
+                chat_input,
+                num_dimensions=num_dimensions,
+                num_criteria=num_criteria,
+                category_hints=category_hints,
+                dimensions=resolved_dims,
+                use_variables=use_variables,
+                guidelines=guidelines,
+            )
+    finally:
+        if temp_file is not None:
+            import os
+
+            os.unlink(temp_file)
+
+    metrics_summary = metrics.get_summary() if metrics else None
+
+    return GenerationResult(
+        rubric=rubric,
+        model=model,
+        input_type=input_type,
+        input_source=input_source,
+        metrics=metrics_summary,
+    )
+
+
+def refine(
+    *,
+    rubric: Rubric | str | Path,
+    model: str = "gpt-4",
+    base_url: str | None = None,
+    feedback: str | None = None,
+    input_file: str | Path | None = None,
+    input_content: str | None = None,
+    input_type: Literal["chat_session", "qna"] | None = None,
+    dimensions: list[Dimension] | str | Path | None = None,
+    use_variables: bool = True,
+    variables_file: str | Path | None = None,
+    track_metrics: bool = True,
+) -> RefinementResult:
+    """Refine an existing rubric with optional feedback and context.
+
+    Args:
+        rubric: A Rubric object or path to a rubric YAML file.
+        model: LLM model to use for refinement.
+        base_url: Custom API base URL.
+        feedback: Optional feedback text to guide refinement.
+        input_file: Optional path to context file (Q&A or chat session).
+        input_content: Optional raw context content string.
+        input_type: Type of context input. Required if input_file or
+            input_content is provided.
+        dimensions: Optional dimensions to merge with existing.
+        use_variables: Whether to use variables in the refined rubric.
+        variables_file: Path to external variables file.
+        track_metrics: Whether to track LLM call metrics.
+
+    Returns:
+        RefinementResult containing the refined Rubric.
+
+    Raises:
+        ValueError: If input is provided without input_type.
+        FileNotFoundError: If rubric or input file not found.
+        RubricValidationError: If rubric is invalid.
+    """
+    import tempfile
+
+    resolved_rubric = _resolve_rubric(
+        rubric, variables_file=variables_file, require_variables=False
+    )
+    resolved_dims = _resolve_dimensions(dimensions)
+
+    # Create metrics aggregator
+    metrics = MetricsAggregator() if track_metrics else None
+
+    # Create generator
+    generator = RubricGenerator(model=model, base_url=base_url, metrics=metrics)
+
+    has_context = input_file is not None or input_content is not None
+
+    # Refine with or without context
+    if has_context:
+        if input_type is None:
+            raise ValueError("input_type is required when input_file or input_content is provided.")
+
+        # Resolve context input
+        file_path, content = _resolve_input(input_file, input_content)
+
+        temp_file = None
+        try:
+            if content is not None:
+                suffix = ".yaml" if input_type == "qna" else ".txt"
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=suffix, delete=False, encoding="utf-8"
+                ) as f:
+                    f.write(content)
+                    temp_file = f.name
+                parse_path = temp_file
+            else:
+                parse_path = str(file_path)
+
+            if input_type == "qna":
+                qa_input = parse_qa_input(parse_path)
+                refined = generator.refine_rubric_with_qa(
+                    resolved_rubric,
+                    qa_input,
+                    feedback=feedback,
+                    dimensions_to_merge=resolved_dims,
+                    use_variables=use_variables,
+                )
+            else:
+                chat_input = parse_chat_session(parse_path)
+                refined = generator.refine_rubric_with_chat(
+                    resolved_rubric,
+                    chat_input,
+                    feedback=feedback,
+                    dimensions_to_merge=resolved_dims,
+                    use_variables=use_variables,
+                )
+        finally:
+            if temp_file is not None:
+                import os
+
+                os.unlink(temp_file)
+    else:
+        refined = generator.refine_rubric(
+            resolved_rubric,
+            feedback=feedback,
+            dimensions_to_merge=resolved_dims,
+            use_variables=use_variables,
+        )
+
+    metrics_summary = metrics.get_summary() if metrics else None
+
+    return RefinementResult(
+        rubric=refined,
+        original_rubric=resolved_rubric,
+        model=model,
+        had_feedback=feedback is not None,
+        had_context=has_context,
         metrics=metrics_summary,
     )

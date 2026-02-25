@@ -791,3 +791,261 @@ class TestEvaluate:
                 input_content="content",
                 panel_config=single_judge_panel,
             )
+
+
+# =============================================================================
+# generate() API Function Tests
+# =============================================================================
+
+
+class TestGenerate:
+    """Tests for the generate() public API function."""
+
+    def test_generate_from_qna_file(self, simple_rubric, tmp_path):
+        """Generate a rubric from a Q&A file."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import GenerationResult, generate
+
+        qna_file = tmp_path / "qna.yaml"
+        qna_file.write_text("question: What is Python?\nanswer: A programming language.")
+
+        mock_generator = MagicMock()
+        mock_generator.generate_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = generate(
+                input_file=str(qna_file),
+                input_type="qna",
+                model="gpt-4",
+                track_metrics=False,
+            )
+
+        assert isinstance(result, GenerationResult)
+        assert result.rubric is simple_rubric
+        assert result.model == "gpt-4"
+        assert result.input_type == "qna"
+        assert result.input_source == str(qna_file)
+        mock_generator.generate_rubric.assert_called_once()
+
+    def test_generate_from_chat_file(self, simple_rubric, tmp_path):
+        """Generate a rubric from a chat session file."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import generate
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: Hello\nAssistant: Hi!")
+
+        mock_generator = MagicMock()
+        mock_generator.generate_rubric_from_chat.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = generate(
+                input_file=str(chat_file),
+                input_type="chat_session",
+                model="gpt-4o",
+                track_metrics=False,
+            )
+
+        assert result.rubric is simple_rubric
+        assert result.input_type == "chat_session"
+        mock_generator.generate_rubric_from_chat.assert_called_once()
+
+    def test_generate_from_content_string(self, simple_rubric):
+        """Generate a rubric from inline content."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import generate
+
+        mock_generator = MagicMock()
+        mock_generator.generate_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = generate(
+                input_content="question: What is Python?\nanswer: A language.",
+                input_type="qna",
+                model="gpt-4",
+                track_metrics=False,
+            )
+
+        assert result.input_source == "<in-memory>"
+        assert result.rubric is simple_rubric
+
+    def test_generate_with_dimensions(self, simple_rubric, binary_dimension, tmp_path):
+        """Generate passes pre-defined dimensions to generator."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import generate
+
+        qna_file = tmp_path / "qna.yaml"
+        qna_file.write_text("question: Q\nanswer: A")
+
+        mock_generator = MagicMock()
+        mock_generator.generate_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            generate(
+                input_file=str(qna_file),
+                input_type="qna",
+                model="gpt-4",
+                dimensions=[binary_dimension],
+                track_metrics=False,
+            )
+
+        call_kwargs = mock_generator.generate_rubric.call_args
+        assert call_kwargs.kwargs.get("dimensions") == [binary_dimension]
+
+    def test_generate_with_guidelines(self, simple_rubric, tmp_path):
+        """Generate passes guidelines to generator."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import generate
+
+        qna_file = tmp_path / "qna.yaml"
+        qna_file.write_text("question: Q\nanswer: A")
+
+        mock_generator = MagicMock()
+        mock_generator.generate_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            generate(
+                input_file=str(qna_file),
+                input_type="qna",
+                model="gpt-4",
+                guidelines="Focus on accuracy",
+                track_metrics=False,
+            )
+
+        call_kwargs = mock_generator.generate_rubric.call_args
+        assert call_kwargs.kwargs.get("guidelines") == "Focus on accuracy"
+
+    def test_generate_missing_input_raises(self):
+        """Generate raises ValueError when no input is provided."""
+        from rubric_kit.api import generate
+
+        with pytest.raises(ValueError, match="Either input_file or input_content"):
+            generate(model="gpt-4")
+
+
+# =============================================================================
+# refine() API Function Tests
+# =============================================================================
+
+
+class TestRefine:
+    """Tests for the refine() public API function."""
+
+    def test_refine_basic(self, simple_rubric):
+        """Refine a rubric without context or feedback."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import RefinementResult, refine
+
+        refined_rubric = simple_rubric  # Use same rubric for simplicity
+        mock_generator = MagicMock()
+        mock_generator.refine_rubric.return_value = refined_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = refine(
+                rubric=simple_rubric,
+                model="gpt-4",
+                track_metrics=False,
+            )
+
+        assert isinstance(result, RefinementResult)
+        assert result.rubric is refined_rubric
+        assert result.original_rubric is simple_rubric
+        assert result.model == "gpt-4"
+        assert result.had_feedback is False
+        assert result.had_context is False
+        mock_generator.refine_rubric.assert_called_once()
+
+    def test_refine_with_feedback(self, simple_rubric):
+        """Refine with feedback text."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import refine
+
+        mock_generator = MagicMock()
+        mock_generator.refine_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = refine(
+                rubric=simple_rubric,
+                model="gpt-4",
+                feedback="Add more criteria for tool usage",
+                track_metrics=False,
+            )
+
+        assert result.had_feedback is True
+        call_kwargs = mock_generator.refine_rubric.call_args
+        assert call_kwargs.kwargs.get("feedback") == "Add more criteria for tool usage"
+
+    def test_refine_with_qa_context(self, simple_rubric, tmp_path):
+        """Refine with Q&A context input."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import refine
+
+        qna_file = tmp_path / "qna.yaml"
+        qna_file.write_text("question: Q\nanswer: A")
+
+        mock_generator = MagicMock()
+        mock_generator.refine_rubric_with_qa.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = refine(
+                rubric=simple_rubric,
+                model="gpt-4",
+                input_file=str(qna_file),
+                input_type="qna",
+                track_metrics=False,
+            )
+
+        assert result.had_context is True
+        mock_generator.refine_rubric_with_qa.assert_called_once()
+
+    def test_refine_with_chat_context(self, simple_rubric, tmp_path):
+        """Refine with chat session context input."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import refine
+
+        chat_file = tmp_path / "chat.txt"
+        chat_file.write_text("User: Hello\nAssistant: Hi!")
+
+        mock_generator = MagicMock()
+        mock_generator.refine_rubric_with_chat.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = refine(
+                rubric=simple_rubric,
+                model="gpt-4",
+                input_file=str(chat_file),
+                input_type="chat_session",
+                track_metrics=False,
+            )
+
+        assert result.had_context is True
+        mock_generator.refine_rubric_with_chat.assert_called_once()
+
+    def test_refine_from_rubric_path(self, sample_rubric_yaml, simple_rubric):
+        """Refine accepts a rubric file path."""
+        from unittest.mock import MagicMock, patch
+
+        from rubric_kit.api import refine
+
+        mock_generator = MagicMock()
+        mock_generator.refine_rubric.return_value = simple_rubric
+
+        with patch("rubric_kit.api.RubricGenerator", return_value=mock_generator):
+            result = refine(
+                rubric=sample_rubric_yaml,
+                model="gpt-4",
+                track_metrics=False,
+            )
+
+        assert result.rubric is simple_rubric
+        # Original rubric was loaded from file
+        assert isinstance(result.original_rubric, Rubric)
