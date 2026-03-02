@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import yaml
 
+import rubric_kit.api as api
 from rubric_kit import converters
 from rubric_kit.arena import run_arena_from_outputs, run_arena_from_spec
 from rubric_kit.cli import create_parser
@@ -234,62 +235,67 @@ def cmd_evaluate(args) -> int:
     if getattr(args, "dry_run", False):
         return _cmd_evaluate_dry_run(args)
 
-    # Load rubric
-    print(f"Loading rubric from {args.rubric_file}...")
+    input_file, input_type = _get_input_file_and_type(args)
     variables_file = getattr(args, "variables_file", None)
+
+    # Print CLI progress
+    print(f"Loading rubric from {args.rubric_file}...")
     if variables_file:
         print(f"   Using variables from: {variables_file}")
-    rubric = load_rubric(args.rubric_file, variables_file=variables_file)
+
+    # Delegate core evaluation to API
+    result = api.evaluate(
+        rubric=args.rubric_file,
+        input_file=input_file,
+        input_type=input_type,
+        panel_config=args.judge_panel_config,
+        model=args.model,
+        base_url=args.base_url,
+        variables_file=variables_file,
+        track_metrics=not getattr(args, "no_metrics", False),
+        include_call_log=getattr(args, "include_call_log", False),
+    )
+
+    # Print CLI summaries
+    rubric = result.rubric
+    panel_config = result.panel_config
     print(f"✓ Loaded {len(rubric.dimensions)} dimensions and {len(rubric.criteria)} criteria")
 
-    # Load or create judge panel configuration
     if args.judge_panel_config:
-        print(f"\nLoading judge panel configuration from {args.judge_panel_config}...")
-        panel_config = load_judge_panel_config(args.judge_panel_config)
         print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
     else:
-        panel_config = create_default_panel_config(args)
         print(f"\n🤖 Using single judge: {args.model}")
 
-    # Create metrics aggregator unless disabled
-    metrics = None
-    if not getattr(args, "no_metrics", False):
-        include_call_log = getattr(args, "include_call_log", False)
-        metrics = MetricsAggregator(include_call_log=include_call_log)
+    print(f"✓ Evaluated {len(result.criteria_results)} criteria")
+    print(
+        f"\n✓ Evaluation complete: {result.summary.total_score}/{result.summary.max_score} ({result.summary.percentage:.1f}%)"
+    )
 
-    # Determine input file and type
-    input_file, input_type = _get_input_file_and_type(args)
-
-    # Run evaluation
-    print(f"\nEvaluating {input_type.replace('_', ' ')} from {input_file}...")
-    print_evaluation_config(panel_config)
-
-    evaluations = _run_evaluation(rubric, input_file, input_type, panel_config, metrics=metrics)
-    print(f"✓ Evaluated {len(evaluations)} criteria")
-
-    # Process scores
-    results, total_score, max_score, percentage = _process_evaluation_results(rubric, evaluations)
-
-    # Build and write output
+    # Build and write output YAML (CLI-specific format)
+    results_dicts = [r.model_dump(exclude_none=True) for r in result.criteria_results]
     output_data = _build_evaluate_output(
         args,
         rubric,
         panel_config,
-        results,
-        total_score,
-        max_score,
-        percentage,
+        results_dicts,
+        result.summary.total_score,
+        result.summary.max_score,
+        result.summary.percentage,
         input_type,
         input_file,
-        metrics=metrics,
+        metrics=None,  # Handled via result.metrics below
     )
+
+    # Add metrics from API result
+    if result.metrics is not None:
+        output_data["metrics"] = result.metrics.to_dict()
 
     output_file = ensure_yaml_extension(args.output_file)
     _write_yaml_output(output_file, output_data)
 
     # Print metrics summary
-    if metrics:
-        _print_metrics_summary(metrics)
+    if result.metrics is not None:
+        _print_metrics_summary_from_api(result.metrics)
 
     # Generate PDF report if requested
     if args.report:
@@ -297,7 +303,7 @@ def cmd_evaluate(args) -> int:
 
     # Print results table
     if not args.no_table:
-        _print_results_table(results)
+        _print_results_table(results_dicts)
 
     return 0
 
@@ -474,6 +480,11 @@ def _print_dry_run_results(model_estimates: dict, max_tokens: int) -> None:
 def _print_metrics_summary(metrics: MetricsAggregator) -> None:
     """Print a summary of metrics to console."""
     summary = metrics.get_summary()
+    _print_metrics_summary_from_api(summary)
+
+
+def _print_metrics_summary_from_api(summary) -> None:
+    """Print a summary of metrics from a MetricsSummary object."""
     print("\n📊 Metrics Summary:")
     print(f"   Total LLM calls: {summary.total_calls}")
     print(
@@ -1438,6 +1449,7 @@ def cmd_arena(args) -> int:
             report_file=args.report,
             report_title=args.report_title,
             print_table=not args.no_table,
+            include_input=getattr(args, "include_input", False),
         )
 
     # Pass functions from this module's namespace for proper test mocking
@@ -1451,6 +1463,7 @@ def cmd_arena(args) -> int:
         evaluate_panel=evaluate_rubric_with_panel,
         evaluate_panel_qa=evaluate_rubric_with_panel_from_qa,
         pdf_exporter=export_arena_pdf,
+        include_input=getattr(args, "include_input", False),
     )
 
 

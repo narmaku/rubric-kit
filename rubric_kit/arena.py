@@ -137,6 +137,21 @@ def _substitute_tool_calls(tool_calls: ToolCalls, variables: dict[str, str]) -> 
     )
 
 
+def _generate_contestant_id(index: int, filename: str) -> str:
+    """Generate a unique contestant ID from a 1-based index and filename.
+
+    Args:
+        index: Zero-based index of the contestant in the input list.
+        filename: Full path or basename of the output file.
+
+    Returns:
+        ID in the format ``contestant-NNN-sanitized-basename``.
+    """
+    basename = os.path.splitext(os.path.basename(filename))[0]
+    sanitized = basename.replace("output_", "").replace("_", "-")
+    return f"contestant-{index + 1:03d}-{sanitized}"
+
+
 def combine_outputs_to_arena(
     output_files: list[str], arena_name: str = "Combined Arena"
 ) -> dict[str, Any]:
@@ -160,9 +175,9 @@ def combine_outputs_to_arena(
         if not data.get("results"):
             raise ValueError(f"File missing 'results' section: {output_file}")
 
-        basename = os.path.splitext(os.path.basename(output_file))[0]
-        contestant_id = basename.replace("output_", "").replace("_", "-")
+        contestant_id = _generate_contestant_id(idx, output_file)
         metadata = data.get("metadata", {})
+        basename = os.path.splitext(os.path.basename(output_file))[0]
         contestant_name = metadata.get("report_title", basename)
         input_info = data.get("input", {})
         summary = data.get("summary", {})
@@ -351,6 +366,7 @@ def run_arena_from_spec(
     evaluate_panel: Callable | None = None,
     evaluate_panel_qa: Callable | None = None,
     pdf_exporter: Callable | None = None,
+    include_input: bool = False,
 ) -> int:
     """Run arena evaluation from specification file."""
     print(f"Loading arena specification from {arena_spec_file}...")
@@ -451,7 +467,7 @@ def run_arena_from_spec(
     print(f"✓ Arena results written (YAML){status}")
 
     if report_file:
-        _generate_arena_report(output_file, report_file, pdf_exporter)
+        _generate_arena_report(output_file, report_file, pdf_exporter, include_input=include_input)
 
     if print_table:
         _print_arena_rankings(rankings)
@@ -465,6 +481,7 @@ def run_arena_from_outputs(
     report_file: str | None = None,
     report_title: str | None = None,
     print_table: bool = True,
+    include_input: bool = False,
 ) -> int:
     """Combine existing output files into arena format."""
     print(f"Combining {len(output_files)} evaluation outputs into arena format...")
@@ -481,7 +498,7 @@ def run_arena_from_outputs(
     print("✓ Arena results written (YAML)")
 
     if report_file:
-        _generate_arena_report(output_file, report_file)
+        _generate_arena_report(output_file, report_file, include_input=include_input)
 
     if print_table:
         _print_arena_rankings(output_data["rankings"])
@@ -541,13 +558,17 @@ def _build_arena_output(
 
 
 def _generate_arena_report(
-    output_file: str, report_file: str, pdf_exporter: Callable | None = None
+    output_file: str,
+    report_file: str,
+    pdf_exporter: Callable | None = None,
+    *,
+    include_input: bool = False,
 ) -> None:
     """Generate PDF report for arena results."""
     print(f"\nGenerating Arena PDF report to {report_file}...")
     try:
         exporter = pdf_exporter or export_arena_pdf
-        exporter(output_file, report_file)
+        exporter(output_file, report_file, include_input=include_input)
         print("✓ Arena PDF report generated")
     except Exception as e:
         print(f"⚠ PDF generation failed: {e}", file=sys.stderr)

@@ -441,5 +441,11 @@ Examples:
         action="store_true",
         help="Force re-evaluation of all contestants (ignore cached results)",
     )
+    parser.add_argument(
+        "--include-input",
+        action="store_true",
+        dest="include_input",
+        help="Include the input content (Q&A answers) for each contestant in the PDF report",
+    )
 
     return parser
