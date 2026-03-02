@@ -699,9 +699,7 @@ def dry_run_evaluate(
     estimates: dict[str, dict[str, Any]] = {}
 
     for criterion in resolved_rubric.criteria:
-        prompt = build_binary_criterion_prompt(
-            criterion, "[Sample chat content for estimation]"
-        )
+        prompt = build_binary_criterion_prompt(criterion, "[Sample chat content for estimation]")
         messages = [
             {"role": "system", "content": config.system_prompt},
             {"role": "user", "content": prompt},

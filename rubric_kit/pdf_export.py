@@ -1703,9 +1703,7 @@ def _create_contestant_details_section(
         story.append(Spacer(1, 0.2 * inch))
 
 
-def export_arena_pdf(
-    input_file: str, output_file: str, *, include_input: bool = False
-) -> None:
+def export_arena_pdf(input_file: str, output_file: str, *, include_input: bool = False) -> None:
     """
     Export arena comparative evaluation results to PDF format.
 

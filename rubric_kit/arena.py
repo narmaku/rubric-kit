@@ -467,9 +467,7 @@ def run_arena_from_spec(
     print(f"✓ Arena results written (YAML){status}")
 
     if report_file:
-        _generate_arena_report(
-            output_file, report_file, pdf_exporter, include_input=include_input
-        )
+        _generate_arena_report(output_file, report_file, pdf_exporter, include_input=include_input)
 
     if print_table:
         _print_arena_rankings(rankings)

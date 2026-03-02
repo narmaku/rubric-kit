@@ -117,9 +117,7 @@ def sample_rubric_yaml(simple_rubric):
             },
         ],
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.dump(rubric_dict, f, sort_keys=False)
         path = f.name
     yield path
@@ -136,9 +134,7 @@ def sample_panel_yaml(single_judge_panel):
             "consensus": {"mode": "unanimous"},
         }
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.dump(panel_dict, f, sort_keys=False)
         path = f.name
     yield path
@@ -157,9 +153,7 @@ def sample_dimensions_yaml():
             }
         ]
     }
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
-    ) as f:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False, encoding="utf-8") as f:
         yaml.dump(dims_dict, f, sort_keys=False)
         path = f.name
     yield path
@@ -614,9 +608,7 @@ class TestEvaluate:
             },
         }
 
-    def test_evaluate_chat_session_from_file(
-        self, simple_rubric, single_judge_panel, tmp_path
-    ):
+    def test_evaluate_chat_session_from_file(self, simple_rubric, single_judge_panel, tmp_path):
         """Evaluate a chat session file returns EvaluationResult."""
         from unittest.mock import patch
 
@@ -672,9 +664,7 @@ class TestEvaluate:
         assert result.input_type == "qna"
         assert len(result.criteria_results) == 2
 
-    def test_evaluate_with_rubric_path(
-        self, sample_rubric_yaml, single_judge_panel, tmp_path
-    ):
+    def test_evaluate_with_rubric_path(self, sample_rubric_yaml, single_judge_panel, tmp_path):
         """Evaluate accepts a rubric file path."""
         from unittest.mock import patch
 

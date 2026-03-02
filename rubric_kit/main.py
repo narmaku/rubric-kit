@@ -267,7 +267,9 @@ def cmd_evaluate(args) -> int:
         print(f"\n🤖 Using single judge: {args.model}")
 
     print(f"✓ Evaluated {len(result.criteria_results)} criteria")
-    print(f"\n✓ Evaluation complete: {result.summary.total_score}/{result.summary.max_score} ({result.summary.percentage:.1f}%)")
+    print(
+        f"\n✓ Evaluation complete: {result.summary.total_score}/{result.summary.max_score} ({result.summary.percentage:.1f}%)"
+    )
 
     # Build and write output YAML (CLI-specific format)
     results_dicts = [r.model_dump(exclude_none=True) for r in result.criteria_results]
