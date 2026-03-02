@@ -1633,7 +1633,9 @@ def _create_radar_charts(contestants: dict[str, Any], story: list) -> None:
     story.append(Spacer(1, 0.3 * inch))
 
 
-def _create_contestant_details_section(contestants: dict[str, Any], story: list) -> None:
+def _create_contestant_details_section(
+    contestants: dict[str, Any], story: list, *, include_input: bool = False
+) -> None:
     """Create detailed results section for each contestant."""
     styles = getSampleStyleSheet()
 
@@ -1687,6 +1689,12 @@ def _create_contestant_details_section(contestants: dict[str, Any], story: list)
 
         story.append(Spacer(1, 0.1 * inch))
 
+        # Input content (Q&A / chat session) per contestant
+        if include_input:
+            input_data = cdata.get("input")
+            if input_data:
+                _create_input_section(input_data, story)
+
         # Results table (compact)
         results = cdata.get("results", [])
         if results:
@@ -1695,13 +1703,17 @@ def _create_contestant_details_section(contestants: dict[str, Any], story: list)
         story.append(Spacer(1, 0.2 * inch))
 
 
-def export_arena_pdf(input_file: str, output_file: str) -> None:
+def export_arena_pdf(
+    input_file: str, output_file: str, *, include_input: bool = False
+) -> None:
     """
     Export arena comparative evaluation results to PDF format.
 
     Args:
         input_file: Path to input YAML file with arena results
         output_file: Path to output PDF file
+        include_input: If True, include the input content (Q&A / answers)
+            for each contestant in the report.
     """
     # Load data
     data = _load_evaluation_data(input_file)
@@ -1750,8 +1762,8 @@ def export_arena_pdf(input_file: str, output_file: str) -> None:
     except Exception:
         pass  # Continue without charts if they fail
 
-    # Contestant details
-    _create_contestant_details_section(contestants, story)
+    # Contestant details (with optional input content)
+    _create_contestant_details_section(contestants, story, include_input=include_input)
 
     # Rubric Appendix
     _create_rubric_appendix(rubric_data, story)

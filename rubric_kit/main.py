@@ -1447,6 +1447,7 @@ def cmd_arena(args) -> int:
             report_file=args.report,
             report_title=args.report_title,
             print_table=not args.no_table,
+            include_input=getattr(args, "include_input", False),
         )
 
     # Pass functions from this module's namespace for proper test mocking
@@ -1460,6 +1461,7 @@ def cmd_arena(args) -> int:
         evaluate_panel=evaluate_rubric_with_panel,
         evaluate_panel_qa=evaluate_rubric_with_panel_from_qa,
         pdf_exporter=export_arena_pdf,
+        include_input=getattr(args, "include_input", False),
     )
 
 

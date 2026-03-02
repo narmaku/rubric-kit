@@ -366,6 +366,7 @@ def run_arena_from_spec(
     evaluate_panel: Callable | None = None,
     evaluate_panel_qa: Callable | None = None,
     pdf_exporter: Callable | None = None,
+    include_input: bool = False,
 ) -> int:
     """Run arena evaluation from specification file."""
     print(f"Loading arena specification from {arena_spec_file}...")
@@ -466,7 +467,9 @@ def run_arena_from_spec(
     print(f"✓ Arena results written (YAML){status}")
 
     if report_file:
-        _generate_arena_report(output_file, report_file, pdf_exporter)
+        _generate_arena_report(
+            output_file, report_file, pdf_exporter, include_input=include_input
+        )
 
     if print_table:
         _print_arena_rankings(rankings)
@@ -480,6 +483,7 @@ def run_arena_from_outputs(
     report_file: str | None = None,
     report_title: str | None = None,
     print_table: bool = True,
+    include_input: bool = False,
 ) -> int:
     """Combine existing output files into arena format."""
     print(f"Combining {len(output_files)} evaluation outputs into arena format...")
@@ -496,7 +500,7 @@ def run_arena_from_outputs(
     print("✓ Arena results written (YAML)")
 
     if report_file:
-        _generate_arena_report(output_file, report_file)
+        _generate_arena_report(output_file, report_file, include_input=include_input)
 
     if print_table:
         _print_arena_rankings(output_data["rankings"])
@@ -556,13 +560,17 @@ def _build_arena_output(
 
 
 def _generate_arena_report(
-    output_file: str, report_file: str, pdf_exporter: Callable | None = None
+    output_file: str,
+    report_file: str,
+    pdf_exporter: Callable | None = None,
+    *,
+    include_input: bool = False,
 ) -> None:
     """Generate PDF report for arena results."""
     print(f"\nGenerating Arena PDF report to {report_file}...")
     try:
         exporter = pdf_exporter or export_arena_pdf
-        exporter(output_file, report_file)
+        exporter(output_file, report_file, include_input=include_input)
         print("✓ Arena PDF report generated")
     except Exception as e:
         print(f"⚠ PDF generation failed: {e}", file=sys.stderr)
