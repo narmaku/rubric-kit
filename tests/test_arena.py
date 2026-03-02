@@ -693,7 +693,7 @@ class TestDuplicateBasenameHandling:
         assert len(result["contestants"]) == 20
         assert len(result["rankings"]) == 20
         ids = list(result["contestants"].keys())
-        assert len(set(ids)) == 20, f"Not all IDs unique among 20 contestants"
+        assert len(set(ids)) == 20, "Not all IDs unique among 20 contestants"
 
 
 class TestArenaFromOutputsCLI:
