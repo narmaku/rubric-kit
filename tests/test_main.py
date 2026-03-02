@@ -203,7 +203,7 @@ A: The capital of France is Paris."""
 class TestEvaluateCommand:
     """Test the 'evaluate' subcommand."""
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.api.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_command(
         self, mock_eval_llm, sample_rubric_file, sample_chat_session_file, capsys
@@ -260,7 +260,7 @@ class TestEvaluateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.api.evaluate_rubric_with_panel")
     @patch("rubric_kit.main.export_evaluation_pdf")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_with_report(
@@ -306,7 +306,7 @@ class TestEvaluateCommand:
             if os.path.exists(pdf_path):
                 os.unlink(pdf_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.api.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_with_report_title(
         self, mock_eval_llm, sample_rubric_file, sample_chat_session_file
@@ -350,7 +350,7 @@ class TestEvaluateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.api.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_output_is_self_contained(
         self, mock_eval_llm, sample_rubric_file, sample_chat_session_file
@@ -412,7 +412,7 @@ class TestEvaluateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.api.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_always_includes_input_content(
         self, mock_eval_llm, sample_rubric_file, sample_chat_session_file
