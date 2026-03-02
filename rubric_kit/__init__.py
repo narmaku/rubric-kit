@@ -1,6 +1,6 @@
 """Rubric Kit - Generate high-quality Rubrics based on custom dimensions, descriptors, criteria and scoring system."""
 
-__version__ = "0.1.6"
+__version__ = "0.2.0"
 
 # Public API functions
 # Result types
