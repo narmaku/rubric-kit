@@ -533,6 +533,169 @@ class TestCombineOutputsToArena:
         assert contestant_ids[1] == "contestant-002-model-b"
 
 
+class TestDuplicateBasenameHandling:
+    """Regression tests for arena bug when output files share the same basename.
+
+    Before the fix (commit f31959a), contestant IDs were derived solely from
+    the filename, so files named the same (from different directories) would
+    silently overwrite each other in the results dict, losing data.
+
+    The fix uses ``_generate_contestant_id()`` which prefixes a sequential
+    index (``contestant-NNN-...``) to guarantee uniqueness.
+    """
+
+    def _make_output(self, score: int, max_score: int = 3, title: str = "Model") -> dict:
+        """Create a minimal evaluation output dict."""
+        return {
+            "results": [
+                {
+                    "criterion_name": "c1",
+                    "dimension": "d1",
+                    "score": score,
+                    "max_score": max_score,
+                    "result": "pass" if score == max_score else "fail",
+                    "reason": f"Score {score}",
+                }
+            ],
+            "summary": {
+                "total_score": score,
+                "max_score": max_score,
+                "percentage": round(score / max_score * 100, 1) if max_score else 0.0,
+            },
+            "rubric": {"dimensions": [], "criteria": []},
+            "judge_panel": {"judges": []},
+            "input": {"type": "chat_session", "source_file": "input.txt"},
+            "metadata": {"report_title": title},
+        }
+
+    def test_three_files_same_basename_all_unique_ids(self, tmp_path):
+        """Three files with identical basenames produce three unique contestant IDs."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        dirs = [tmp_path / f"run_{i}" for i in range(3)]
+        files = []
+        for i, d in enumerate(dirs):
+            d.mkdir()
+            path = d / "output.yaml"
+            with open(path, "w") as f:
+                yaml.dump(self._make_output(score=i + 1, title=f"Run {i + 1}"), f)
+            files.append(str(path))
+
+        result = combine_outputs_to_arena(files)
+
+        ids = list(result["contestants"].keys())
+        assert len(ids) == 3
+        assert len(set(ids)) == 3, f"IDs are not unique: {ids}"
+
+    def test_duplicate_basenames_preserve_individual_scores(self, tmp_path):
+        """Each contestant retains its own score even when basenames collide."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        dir_a = tmp_path / "a"
+        dir_b = tmp_path / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        file_a = dir_a / "result.yaml"
+        file_b = dir_b / "result.yaml"
+        with open(file_a, "w") as f:
+            yaml.dump(self._make_output(score=3, title="Winner"), f)
+        with open(file_b, "w") as f:
+            yaml.dump(self._make_output(score=1, title="Loser"), f)
+
+        result = combine_outputs_to_arena([str(file_a), str(file_b)])
+
+        scores = [c["summary"]["total_score"] for c in result["contestants"].values()]
+        assert sorted(scores) == [1, 3], "Scores must not be overwritten"
+
+    def test_duplicate_basenames_rankings_reflect_all_contestants(self, tmp_path):
+        """Rankings include every contestant even when basenames are identical."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        files = []
+        for i in range(4):
+            d = tmp_path / f"dir_{i}"
+            d.mkdir()
+            path = d / "eval.yaml"
+            with open(path, "w") as f:
+                yaml.dump(self._make_output(score=i, max_score=3, title=f"M{i}"), f)
+            files.append(str(path))
+
+        result = combine_outputs_to_arena(files)
+
+        assert len(result["rankings"]) == 4
+        # Rankings should be sorted by percentage descending
+        percentages = [r["percentage"] for r in result["rankings"]]
+        assert percentages == sorted(percentages, reverse=True)
+
+    def test_duplicate_basenames_metadata_not_mixed(self, tmp_path):
+        """Each contestant's metadata and input data remains distinct."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        dir_a = tmp_path / "site_a"
+        dir_b = tmp_path / "site_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+
+        data_a = self._make_output(score=3, title="Site A Model")
+        data_a["input"] = {"type": "chat_session", "source_file": "chat_a.txt"}
+        data_b = self._make_output(score=1, title="Site B Model")
+        data_b["input"] = {"type": "qna", "source_file": "qna_b.yaml"}
+
+        file_a = dir_a / "output.yaml"
+        file_b = dir_b / "output.yaml"
+        with open(file_a, "w") as f:
+            yaml.dump(data_a, f)
+        with open(file_b, "w") as f:
+            yaml.dump(data_b, f)
+
+        result = combine_outputs_to_arena([str(file_a), str(file_b)])
+
+        contestants = list(result["contestants"].values())
+        input_types = {c["input"]["type"] for c in contestants}
+        assert input_types == {"chat_session", "qna"}, "Input data was mixed between contestants"
+
+    def test_id_generation_is_deterministic_on_order(self, tmp_path):
+        """Same file list in same order always produces the same IDs."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        dirs = [tmp_path / f"d{i}" for i in range(3)]
+        files = []
+        for i, d in enumerate(dirs):
+            d.mkdir()
+            path = d / "result.yaml"
+            with open(path, "w") as f:
+                yaml.dump(self._make_output(score=i + 1), f)
+            files.append(str(path))
+
+        result1 = combine_outputs_to_arena(files)
+        result2 = combine_outputs_to_arena(files)
+
+        ids1 = list(result1["contestants"].keys())
+        ids2 = list(result2["contestants"].keys())
+        assert ids1 == ids2
+
+    def test_many_duplicates_all_tracked(self, tmp_path):
+        """Stress test: 20 files with the same basename all appear as contestants."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        files = []
+        for i in range(20):
+            d = tmp_path / f"run_{i:03d}"
+            d.mkdir()
+            path = d / "output.yaml"
+            with open(path, "w") as f:
+                yaml.dump(self._make_output(score=(i % 3) + 1, title=f"Run {i}"), f)
+            files.append(str(path))
+
+        result = combine_outputs_to_arena(files)
+
+        assert len(result["contestants"]) == 20
+        assert len(result["rankings"]) == 20
+        ids = list(result["contestants"].keys())
+        assert len(set(ids)) == 20, f"Not all IDs unique among 20 contestants"
+
+
 class TestArenaFromOutputsCLI:
     """Test the arena --from-outputs CLI mode."""
 
