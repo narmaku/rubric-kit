@@ -1865,6 +1865,79 @@ class TestRerunCommand:
             assert result != 0
 
 
+class TestRerunMetricsPropagation:
+    """Test that metrics are properly propagated through the rerun path."""
+
+    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
+    def test_rerun_passes_metrics_to_evaluation(self, mock_eval_llm, sample_evaluation_yaml):
+        """Test that rerun creates a MetricsAggregator and passes it to _run_evaluation."""
+        import sys
+
+        from rubric_kit.main import main
+
+        mock_eval_llm.return_value = {"fact_1": {"type": "binary", "passes": True}}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            output_path = f.name
+
+        try:
+            sys.argv = [
+                "rubric-kit",
+                "rerun",
+                sample_evaluation_yaml,
+                "--output-file",
+                output_path,
+            ]
+
+            result = main()
+
+            assert result == 0
+
+            # Verify that evaluate_rubric_with_panel was called with non-None metrics
+            assert mock_eval_llm.called
+            call_kwargs = mock_eval_llm.call_args
+            metrics_value = call_kwargs.kwargs.get("metrics")
+            assert metrics_value is not None, "metrics should be a MetricsAggregator, not None"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
+    def test_rerun_includes_metrics_in_output(self, mock_eval_llm, sample_evaluation_yaml):
+        """Test that rerun output includes metrics section when tracking is enabled."""
+        import sys
+
+        from rubric_kit.main import main
+
+        mock_eval_llm.return_value = {"fact_1": {"type": "binary", "passes": True}}
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            output_path = f.name
+
+        try:
+            sys.argv = [
+                "rubric-kit",
+                "rerun",
+                sample_evaluation_yaml,
+                "--output-file",
+                output_path,
+            ]
+
+            result = main()
+            assert result == 0
+
+            with open(output_path) as f:
+                new_data = yaml.safe_load(f)
+
+            # Metrics section should be present in the output
+            assert "metrics" in new_data, "metrics section missing from rerun output"
+        finally:
+            if os.path.exists(output_path):
+                os.unlink(output_path)
+
+
 class TestExportCommand:
     """Test the 'export' subcommand."""
 

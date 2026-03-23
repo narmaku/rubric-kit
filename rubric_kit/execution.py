@@ -171,23 +171,27 @@ async def _execute_parallel_async(
     """Async helper for parallel execution."""
     loop = asyncio.get_event_loop()
 
-    tasks = [
-        loop.run_in_executor(
-            None,
-            _call_judge_safe,
-            judge_function,
-            judge,
-            criterion,
-            chat_content,
-            dimension,
-            parsed_session,
-            timeout,
-            metrics,
-        )
-        for judge in judges
-    ]
+    executor = ThreadPoolExecutor(max_workers=len(judges))
+    try:
+        tasks = [
+            loop.run_in_executor(
+                executor,
+                _call_judge_safe,
+                judge_function,
+                judge,
+                criterion,
+                chat_content,
+                dimension,
+                parsed_session,
+                timeout,
+                metrics,
+            )
+            for judge in judges
+        ]
 
-    return await asyncio.gather(*tasks)
+        return await asyncio.gather(*tasks)
+    finally:
+        executor.shutdown(wait=False)
 
 
 def _execute_batched(

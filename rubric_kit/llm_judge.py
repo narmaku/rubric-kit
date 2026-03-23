@@ -1,6 +1,7 @@
 """LLM-based judge panel for automatic criterion evaluation."""
 
 import json
+import logging
 import random
 import re
 import time
@@ -34,6 +35,9 @@ from rubric_kit.tool_evaluator import (
     parse_param_validation_response,
     parse_summary_response,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def read_chat_session(file_path: str) -> str:
@@ -193,7 +197,7 @@ def _evaluate_tool_calls_hybrid(
             validation_results = parse_param_validation_response(response)
             apply_param_validation_results(breakdown, validation_results)
         except Exception as e:
-            print(f"Warning: Parameter validation failed: {e}")
+            logger.warning("Parameter validation failed: %s", e)
             # Continue without param validation - programmatic results stand
 
     # Step 3: LLM summary generation
@@ -209,7 +213,7 @@ def _evaluate_tool_calls_hybrid(
         )
         breakdown.summary = parse_summary_response(response)
     except Exception as e:
-        print(f"Warning: Summary generation failed: {e}")
+        logger.warning("Summary generation failed: %s", e)
         # Generate a basic summary from the data
         status = "passed" if breakdown.overall_pass else "failed"
         breakdown.summary = f"Tool evaluation {status} with score {breakdown.overall_score:.1f}/3."
@@ -637,11 +641,11 @@ def _parse_chat_session_safe(chat_content: str, use_parser: bool) -> ChatSession
 
     try:
         parsed_session = parse_chat_session(chat_content)
-        print(f"Parsed chat session: found {len(parsed_session.tool_calls)} tool calls")
+        logger.info("Parsed chat session: found %d tool calls", len(parsed_session.tool_calls))
         return parsed_session
     except Exception as e:
-        print(f"Warning: Failed to parse chat session: {e}")
-        print("Falling back to raw content evaluation")
+        logger.warning("Failed to parse chat session: %s", e)
+        logger.info("Falling back to raw content evaluation")
         return None
 
 

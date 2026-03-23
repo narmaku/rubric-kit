@@ -2,12 +2,15 @@
 
 import csv
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 
 import yaml
 from tabulate import tabulate
 
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from rubric_kit.schema import JudgePanelConfig
@@ -574,12 +577,12 @@ def convert_yaml_to_json(input_path: str, output_path: str) -> None:
 
 
 def print_evaluation_config(panel_config: "JudgePanelConfig") -> None:
-    """Print evaluation configuration details to console.
+    """Log evaluation configuration details.
 
     Args:
         panel_config: Judge panel configuration to display.
     """
-    print(f"   Execution mode: {panel_config.execution.mode}")
-    print(f"   Consensus mode: {panel_config.consensus.mode}")
+    logger.info("   Execution mode: %s", panel_config.execution.mode)
+    logger.info("   Consensus mode: %s", panel_config.consensus.mode)
     if panel_config.consensus.mode in ("quorum", "majority"):
-        print(f"   Consensus threshold: {panel_config.consensus.threshold}")
+        logger.info("   Consensus threshold: %s", panel_config.consensus.threshold)

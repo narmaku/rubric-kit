@@ -334,6 +334,48 @@ def test_execute_judges_empty_judges_list():
 # ============================================================================
 
 
+def test_parallel_uses_explicit_thread_pool():
+    """Test that parallel execution creates ThreadPoolExecutor with max_workers=len(judges)."""
+    from unittest.mock import patch
+
+    from rubric_kit.execution import execute_judges
+    from rubric_kit.schema import JudgeConfig
+
+    judges = [
+        JudgeConfig(name="judge_1", model="gpt-4"),
+        JudgeConfig(name="judge_2", model="gpt-4"),
+        JudgeConfig(name="judge_3", model="gpt-4"),
+    ]
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with patch("rubric_kit.execution.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as mock_pool:
+        results = execute_judges(
+            judges=judges,
+            judge_function=mock_judge_function,
+            execution_mode="parallel",
+            criterion=None,
+            chat_content="test",
+        )
+
+    assert len(results) == 3
+
+    # Find the call that created the pool for parallel execution (max_workers=len(judges))
+    # There will also be calls with max_workers=1 from _call_judge_with_timeout
+    parallel_pool_calls = [
+        call for call in mock_pool.call_args_list if call[1].get("max_workers") == len(judges)
+    ]
+    assert len(parallel_pool_calls) >= 1, (
+        f"Expected ThreadPoolExecutor(max_workers={len(judges)}) call, "
+        f"got calls: {mock_pool.call_args_list}"
+    )
+
+
+# ============================================================================
+# Score-based Execution Tests
+# ============================================================================
+
+
 def test_execute_judges_with_scores():
     """Test execution with score-based criteria."""
     from rubric_kit.execution import execute_judges
