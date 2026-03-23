@@ -10,7 +10,7 @@ import pytest
 
 def test_binary_consensus_unanimous_all_pass():
     """Test unanimous consensus when all judges vote pass."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},
@@ -28,7 +28,7 @@ def test_binary_consensus_unanimous_all_pass():
 
 def test_binary_consensus_unanimous_all_fail():
     """Test unanimous consensus when all judges vote fail."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": False, "reason": "Bad"},
@@ -46,7 +46,7 @@ def test_binary_consensus_unanimous_all_fail():
 
 def test_binary_consensus_quorum_reached_pass():
     """Test quorum consensus when threshold is met for pass."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},
@@ -64,7 +64,7 @@ def test_binary_consensus_quorum_reached_pass():
 
 def test_binary_consensus_quorum_reached_fail():
     """Test quorum consensus when threshold is met for fail."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": False, "reason": "Bad"},
@@ -82,7 +82,7 @@ def test_binary_consensus_quorum_reached_fail():
 
 def test_binary_consensus_not_reached_conservative():
     """Test no consensus with conservative (fail) fallback."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},
@@ -100,7 +100,7 @@ def test_binary_consensus_not_reached_conservative():
 
 def test_binary_consensus_not_reached_most_common():
     """Test no consensus with most_common fallback."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},
@@ -118,7 +118,7 @@ def test_binary_consensus_not_reached_most_common():
 
 def test_binary_consensus_single_judge():
     """Test consensus with single judge."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [{"judge": "judge_1", "passes": True, "reason": "Good"}]
     threshold = 1
@@ -137,7 +137,7 @@ def test_binary_consensus_single_judge():
 
 def test_score_consensus_unanimous_all_agree():
     """Test unanimous consensus when all judges give same score."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 3, "reason": "Excellent"},
@@ -155,7 +155,7 @@ def test_score_consensus_unanimous_all_agree():
 
 def test_score_consensus_quorum_reached():
     """Test quorum consensus when threshold is met for a score."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 2, "reason": "Good"},
@@ -173,7 +173,7 @@ def test_score_consensus_quorum_reached():
 
 def test_score_consensus_not_reached_conservative():
     """Test no consensus with conservative (minimum score) fallback."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 1, "reason": "Poor"},
@@ -191,7 +191,7 @@ def test_score_consensus_not_reached_conservative():
 
 def test_score_consensus_not_reached_median():
     """Test no consensus with median fallback."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 1, "reason": "Poor"},
@@ -209,7 +209,7 @@ def test_score_consensus_not_reached_median():
 
 def test_score_consensus_not_reached_median_even_count():
     """Test no consensus with median fallback for even number of judges."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 1, "reason": "Poor"},
@@ -229,7 +229,7 @@ def test_score_consensus_not_reached_median_even_count():
 
 def test_score_consensus_not_reached_most_common():
     """Test no consensus with most_common fallback."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 1, "reason": "Poor"},
@@ -248,7 +248,7 @@ def test_score_consensus_not_reached_most_common():
 
 def test_score_consensus_single_judge():
     """Test consensus with single judge."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [{"judge": "judge_1", "score": 3, "reason": "Excellent"}]
     threshold = 1
@@ -267,7 +267,7 @@ def test_score_consensus_single_judge():
 
 def test_binary_consensus_tie_with_most_common():
     """Test binary consensus tie (1-1) with most_common fallback."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},
@@ -285,7 +285,7 @@ def test_binary_consensus_tie_with_most_common():
 
 def test_score_consensus_multiple_scores_tied():
     """Test score consensus when multiple scores are tied for most common."""
-    from rubric_kit.consensus import apply_score_consensus
+    from rubric_kit.core.consensus import apply_score_consensus
 
     votes = [
         {"judge": "judge_1", "score": 1, "reason": "Poor"},
@@ -305,7 +305,7 @@ def test_score_consensus_multiple_scores_tied():
 
 def test_empty_votes_raises_error():
     """Test that empty votes list raises error."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     with pytest.raises(ValueError, match="No votes provided"):
         apply_binary_consensus([], threshold=1, on_no_consensus="fail")
@@ -313,7 +313,7 @@ def test_empty_votes_raises_error():
 
 def test_invalid_threshold_raises_error():
     """Test that invalid threshold raises error."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [{"judge": "judge_1", "passes": True, "reason": "Good"}]
 
@@ -326,7 +326,7 @@ def test_invalid_threshold_raises_error():
 
 def test_threshold_exceeds_votes_raises_error():
     """Test that threshold exceeding number of votes raises error."""
-    from rubric_kit.consensus import apply_binary_consensus
+    from rubric_kit.core.consensus import apply_binary_consensus
 
     votes = [
         {"judge": "judge_1", "passes": True, "reason": "Good"},

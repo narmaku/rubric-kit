@@ -5,7 +5,7 @@ import os
 import pytest
 import yaml
 
-from rubric_kit.schema import ArenaContestant
+from rubric_kit.models.schema import ArenaContestant
 
 
 class TestLoadArenaSpec:
@@ -193,7 +193,7 @@ class TestApplyVariablesToRubric:
     def test_apply_variables_substitutes_criterion_text(self):
         """Test that variables are substituted in criterion text."""
         from rubric_kit.arena import apply_variables_to_rubric
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         base_rubric = Rubric(
             dimensions=[
@@ -220,7 +220,7 @@ class TestApplyVariablesToRubric:
     def test_apply_variables_substitutes_dimension_description(self):
         """Test that variables are substituted in dimension descriptions."""
         from rubric_kit.arena import apply_variables_to_rubric
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         base_rubric = Rubric(
             dimensions=[
@@ -250,7 +250,7 @@ class TestApplyVariablesToRubric:
     def test_apply_variables_substitutes_tool_params(self):
         """Test that variables are substituted in tool call params."""
         from rubric_kit.arena import apply_variables_to_rubric
-        from rubric_kit.schema import Criterion, Dimension, Rubric, ToolCalls, ToolSpec
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric, ToolCalls, ToolSpec
 
         base_rubric = Rubric(
             dimensions=[
@@ -732,7 +732,7 @@ class TestArenaFromOutputsCLI:
         """Test arena --from-outputs CLI command."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         output_path = str(tmp_path / "arena_result.yaml")
 
@@ -758,7 +758,7 @@ class TestArenaFromOutputsCLI:
         """Test arena --from-outputs with PDF report generation."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         output_path = str(tmp_path / "arena_result.yaml")
         pdf_path = str(tmp_path / "arena_report.pdf")
@@ -926,7 +926,7 @@ class TestArenaPDFExport:
 
     def test_export_arena_pdf(self, arena_output_file, tmp_path):
         """Test that arena PDF export works."""
-        from rubric_kit.pdf_export import export_arena_pdf
+        from rubric_kit.reports.pdf_arena import export_arena_pdf
 
         pdf_path = tmp_path / "arena_report.pdf"
 
@@ -937,7 +937,7 @@ class TestArenaPDFExport:
 
     def test_export_arena_pdf_rejects_non_arena(self, tmp_path):
         """Test that arena PDF export rejects non-arena files."""
-        from rubric_kit.pdf_export import export_arena_pdf
+        from rubric_kit.reports.pdf_arena import export_arena_pdf
 
         # Create a regular evaluation file
         regular_file = tmp_path / "regular.yaml"

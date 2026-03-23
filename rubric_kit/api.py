@@ -24,19 +24,22 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.core.processor import (
+    calculate_percentage_score,
+    calculate_total_score,
+    evaluate_rubric,
+)
 from rubric_kit.generator import (
     RubricGenerator,
     parse_chat_session,
     parse_dimensions_file,
     parse_qa_input,
 )
-from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.io.output import convert_yaml_to_csv, convert_yaml_to_json
+from rubric_kit.io.validator import load_judge_panel_config, load_rubric
 from rubric_kit.metrics import MetricsAggregator, estimate_cost, estimate_tokens
-from rubric_kit.output import convert_yaml_to_csv, convert_yaml_to_json
-from rubric_kit.pdf_export import export_evaluation_pdf
-from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
-from rubric_kit.prompts import EVALUATOR_CONFIG, build_binary_criterion_prompt
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Dimension,
     ExecutionConfig,
@@ -44,7 +47,8 @@ from rubric_kit.schema import (
     JudgePanelConfig,
     Rubric,
 )
-from rubric_kit.validator import load_judge_panel_config, load_rubric
+from rubric_kit.prompts import EVALUATOR_CONFIG, build_binary_criterion_prompt
+from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
 
 logger = logging.getLogger("rubric_kit")

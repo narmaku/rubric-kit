@@ -106,7 +106,7 @@ def apply_binary_consensus(
             - consensus_reached: bool
             - passes: bool (final decision)
             - consensus_count: int (number of judges who agreed on the result)
-            - judge_votes: List[Dict] (all individual votes)
+            - judge_votes: list[dict] (all individual votes)
 
     Raises:
         ValueError: If votes is empty, threshold is invalid, or threshold exceeds votes
@@ -164,7 +164,7 @@ def apply_score_consensus(
             - consensus_reached: bool
             - score: int (final score)
             - consensus_count: int (number of judges who agreed on the score)
-            - judge_votes: List[Dict] (all individual votes)
+            - judge_votes: list[dict] (all individual votes)
 
     Raises:
         ValueError: If votes is empty, threshold is invalid, or threshold exceeds votes

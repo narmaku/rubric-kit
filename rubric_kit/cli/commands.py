@@ -1,5 +1,7 @@
 """Main CLI entry point for rubric-kit."""
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
@@ -8,31 +10,43 @@ import traceback
 from collections.abc import Callable
 from datetime import datetime
 from functools import wraps
-from typing import Any, Optional
+from typing import Any
 
 import yaml
 
 import rubric_kit.api as api
 from rubric_kit import converters
 from rubric_kit.arena import run_arena_from_outputs, run_arena_from_spec
-from rubric_kit.cli import create_parser
+from rubric_kit.cli.parser import create_parser
+from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.core.processor import (
+    calculate_percentage_score,
+    calculate_total_score,
+    evaluate_rubric,
+)
 from rubric_kit.generator import (
     RubricGenerator,
     parse_chat_session,
     parse_dimensions_file,
     parse_qa_input,
 )
-from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
-from rubric_kit.metrics import MetricsAggregator, estimate_cost, estimate_tokens
-from rubric_kit.output import (
+from rubric_kit.io.output import (
     convert_yaml_to_csv,
     convert_yaml_to_json,
     print_evaluation_config,
     print_table,
     print_tool_breakdowns,
 )
-from rubric_kit.pdf_export import export_arena_pdf, export_evaluation_pdf
-from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
+from rubric_kit.io.validator import RubricValidationError, load_judge_panel_config, load_rubric
+from rubric_kit.metrics import MetricsAggregator, estimate_cost, estimate_tokens
+from rubric_kit.models.schema import (
+    ConsensusConfig,
+    Dimension,
+    ExecutionConfig,
+    JudgeConfig,
+    JudgePanelConfig,
+    Rubric,
+)
 from rubric_kit.prompts import (
     EVALUATOR_CONFIG,
     GENERATOR_CONFIG,
@@ -42,15 +56,8 @@ from rubric_kit.prompts import (
     build_criteria_generation_prompt,
     build_dimension_generation_prompt,
 )
-from rubric_kit.schema import (
-    ConsensusConfig,
-    Dimension,
-    ExecutionConfig,
-    JudgeConfig,
-    JudgePanelConfig,
-    Rubric,
-)
-from rubric_kit.validator import RubricValidationError, load_judge_panel_config, load_rubric
+from rubric_kit.reports.pdf_arena import export_arena_pdf
+from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
 
 # =============================================================================
@@ -700,7 +707,7 @@ def _build_generate_metadata(
     num_dimensions: int | None,
     num_criteria: int | None,
     use_variables: bool,
-    metrics: Optional["MetricsAggregator"],
+    metrics: MetricsAggregator | None,
 ) -> dict[str, Any]:
     """Build metadata dict for generated rubric.
 
@@ -1088,7 +1095,7 @@ def _build_refine_metadata(
     input_type: str | None,
     use_variables: bool,
     feedback: str | None,
-    metrics: Optional["MetricsAggregator"],
+    metrics: MetricsAggregator | None,
 ) -> dict[str, Any]:
     """Build metadata dict for refined rubric.
 

@@ -49,7 +49,7 @@ def sample_results():
 
 def test_write_csv(sample_results):
     """Test writing results to CSV."""
-    from rubric_kit.output import write_csv
+    from rubric_kit.io.output import write_csv
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         temp_path = f.name
@@ -75,7 +75,7 @@ def test_write_csv(sample_results):
 
 def test_csv_has_summary_row(sample_results):
     """Test that CSV includes summary row."""
-    from rubric_kit.output import write_csv
+    from rubric_kit.io.output import write_csv
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         temp_path = f.name
@@ -93,7 +93,7 @@ def test_csv_has_summary_row(sample_results):
 
 def test_format_table(sample_results):
     """Test formatting results as a table."""
-    from rubric_kit.output import format_table
+    from rubric_kit.io.output import format_table
 
     table_str = format_table(sample_results)
 
@@ -113,7 +113,7 @@ def test_format_table(sample_results):
 
 def test_format_table_with_summary(sample_results):
     """Test formatting table with summary."""
-    from rubric_kit.output import format_table
+    from rubric_kit.io.output import format_table
 
     table_str = format_table(sample_results, include_summary=True)
 
@@ -125,7 +125,7 @@ def test_format_table_with_summary(sample_results):
 
 def test_print_table(sample_results, capsys):
     """Test printing table to stdout."""
-    from rubric_kit.output import print_table
+    from rubric_kit.io.output import print_table
 
     print_table(sample_results)
 
@@ -136,7 +136,7 @@ def test_print_table(sample_results, capsys):
 
 def test_csv_headers():
     """Test that CSV has correct headers."""
-    from rubric_kit.output import write_csv
+    from rubric_kit.io.output import write_csv
 
     results = [
         {
@@ -172,7 +172,7 @@ def test_csv_headers():
 
 def test_empty_results():
     """Test handling empty results."""
-    from rubric_kit.output import format_table, write_csv
+    from rubric_kit.io.output import format_table, write_csv
 
     # Should not crash with empty results
     table_str = format_table([])
@@ -190,7 +190,7 @@ def test_empty_results():
 
 def test_write_json(sample_results):
     """Test writing results to JSON."""
-    from rubric_kit.output import write_json
+    from rubric_kit.io.output import write_json
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         temp_path = f.name
@@ -214,7 +214,7 @@ def test_write_json(sample_results):
 
 def test_write_json_with_summary(sample_results):
     """Test that JSON includes summary when requested."""
-    from rubric_kit.output import write_json
+    from rubric_kit.io.output import write_json
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         temp_path = f.name
@@ -235,7 +235,7 @@ def test_write_json_with_summary(sample_results):
 
 def test_write_yaml(sample_results):
     """Test writing results to YAML."""
-    from rubric_kit.output import write_yaml
+    from rubric_kit.io.output import write_yaml
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         temp_path = f.name
@@ -259,7 +259,7 @@ def test_write_yaml(sample_results):
 
 def test_write_yaml_with_summary(sample_results):
     """Test that YAML includes summary when requested."""
-    from rubric_kit.output import write_yaml
+    from rubric_kit.io.output import write_yaml
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         temp_path = f.name
@@ -280,7 +280,7 @@ def test_write_yaml_with_summary(sample_results):
 
 def test_detect_format_from_extension():
     """Test format detection from file extension."""
-    from rubric_kit.output import detect_format_from_extension
+    from rubric_kit.io.output import detect_format_from_extension
 
     assert detect_format_from_extension("output.csv") == "csv"
     assert detect_format_from_extension("output.json") == "json"
@@ -291,7 +291,7 @@ def test_detect_format_from_extension():
 
 def test_write_results_csv(sample_results):
     """Test write_results function with CSV format."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
         temp_path = f.name
@@ -312,7 +312,7 @@ def test_write_results_csv(sample_results):
 
 def test_write_results_json(sample_results):
     """Test write_results function with JSON format."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         temp_path = f.name
@@ -332,7 +332,7 @@ def test_write_results_json(sample_results):
 
 def test_write_results_yaml(sample_results):
     """Test write_results function with YAML format."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
         temp_path = f.name
@@ -352,7 +352,7 @@ def test_write_results_yaml(sample_results):
 
 def test_write_results_auto_detect(sample_results):
     """Test write_results function with auto-detection from extension."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     # Test JSON auto-detection
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -382,7 +382,7 @@ def test_write_results_auto_detect(sample_results):
 
 def test_write_results_invalid_format(sample_results):
     """Test write_results function with invalid format."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         temp_path = f.name
@@ -397,7 +397,7 @@ def test_write_results_invalid_format(sample_results):
 
 def test_write_json_with_metadata(sample_results):
     """Test that JSON includes metadata when provided."""
-    from rubric_kit.output import write_json
+    from rubric_kit.io.output import write_json
 
     metadata = {
         "rubric_file": "test_rubric.yaml",
@@ -427,7 +427,7 @@ def test_write_json_with_metadata(sample_results):
 
 def test_write_yaml_with_metadata(sample_results):
     """Test that YAML includes metadata when provided."""
-    from rubric_kit.output import write_yaml
+    from rubric_kit.io.output import write_yaml
 
     metadata = {
         "rubric_file": "test_rubric.yaml",
@@ -454,7 +454,7 @@ def test_write_yaml_with_metadata(sample_results):
 
 def test_write_json_without_metadata(sample_results):
     """Test that JSON works without metadata (backward compatibility)."""
-    from rubric_kit.output import write_json
+    from rubric_kit.io.output import write_json
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
         temp_path = f.name
@@ -474,7 +474,7 @@ def test_write_json_without_metadata(sample_results):
 
 def test_write_results_with_metadata(sample_results):
     """Test write_results function passes metadata to writers."""
-    from rubric_kit.output import write_results
+    from rubric_kit.io.output import write_results
 
     metadata = {"rubric_file": "test_rubric.yaml", "timestamp": "2024-01-01T12:00:00"}
 
@@ -495,7 +495,7 @@ def test_write_results_with_metadata(sample_results):
 
 def test_convert_yaml_to_csv(sample_results):
     """Test converting YAML evaluation results to CSV."""
-    from rubric_kit.output import convert_yaml_to_csv
+    from rubric_kit.io.output import convert_yaml_to_csv
 
     # Create source YAML file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -531,7 +531,7 @@ def test_convert_yaml_to_csv(sample_results):
 
 def test_convert_yaml_to_json(sample_results):
     """Test converting YAML evaluation results to JSON."""
-    from rubric_kit.output import convert_yaml_to_json
+    from rubric_kit.io.output import convert_yaml_to_json
 
     # Create source YAML file
     metadata = {"rubric_file": "test.yaml", "timestamp": "2024-01-01T12:00:00"}
@@ -563,7 +563,7 @@ def test_convert_yaml_to_json(sample_results):
 
 def test_convert_yaml_to_csv_missing_file():
     """Test convert_yaml_to_csv with missing input file."""
-    from rubric_kit.output import convert_yaml_to_csv
+    from rubric_kit.io.output import convert_yaml_to_csv
 
     with pytest.raises(FileNotFoundError):
         convert_yaml_to_csv("nonexistent.yaml", "output.csv")
@@ -571,7 +571,7 @@ def test_convert_yaml_to_csv_missing_file():
 
 def test_convert_yaml_to_json_missing_file():
     """Test convert_yaml_to_json with missing input file."""
-    from rubric_kit.output import convert_yaml_to_json
+    from rubric_kit.io.output import convert_yaml_to_json
 
     with pytest.raises(FileNotFoundError):
         convert_yaml_to_json("nonexistent.yaml", "output.json")
@@ -579,7 +579,7 @@ def test_convert_yaml_to_json_missing_file():
 
 def test_convert_yaml_to_json_always_includes_input(sample_results):
     """Test convert_yaml_to_json always includes full input content."""
-    from rubric_kit.output import convert_yaml_to_json
+    from rubric_kit.io.output import convert_yaml_to_json
 
     chat_content = "User: Test question?\nAssistant: Test answer."
 
@@ -618,7 +618,7 @@ def test_convert_yaml_to_json_always_includes_input(sample_results):
 
 def test_convert_yaml_to_csv_includes_header_comments(sample_results):
     """Test convert_yaml_to_csv includes header comments with metadata and input summary."""
-    from rubric_kit.output import convert_yaml_to_csv
+    from rubric_kit.io.output import convert_yaml_to_csv
 
     chat_content = "User: Test question?\nAssistant: Test answer."
 

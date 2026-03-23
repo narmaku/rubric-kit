@@ -67,7 +67,7 @@ Issues = "https://github.com/narmaku/rubric-kit/issues"
 Documentation = "https://github.com/narmaku/rubric-kit#readme"
 
 [project.scripts]
-rubric-kit = "rubric_kit.main:main"
+rubric-kit = "rubric_kit.cli.commands:main"
 
 [tool.setuptools.packages.find]
 include = ["rubric_kit*"]

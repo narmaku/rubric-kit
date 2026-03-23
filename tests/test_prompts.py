@@ -2,6 +2,7 @@
 
 import pytest
 
+from rubric_kit.models.schema import Criterion, Dimension
 from rubric_kit.prompts import (
     EVALUATOR_CONFIG,
     EVALUATOR_SYSTEM_PROMPT,
@@ -16,7 +17,6 @@ from rubric_kit.prompts import (
     build_score_criterion_prompt,
     build_tool_call_evaluation_prompt,
 )
-from rubric_kit.schema import Criterion, Dimension
 
 
 def test_evaluator_system_prompt_exists():
@@ -318,7 +318,7 @@ def test_build_refine_rubric_prompt_with_feedback():
 
 def test_build_tool_call_evaluation_prompt_basic():
     """Test building tool call evaluation prompt with basic structure."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=True,
@@ -346,7 +346,7 @@ Arguments: {}"""
 
 def test_build_tool_call_evaluation_prompt_with_all_types():
     """Test tool call prompt includes required, optional, and prohibited tools."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=True,
@@ -379,7 +379,7 @@ def test_build_tool_call_evaluation_prompt_with_all_types():
 
 def test_build_tool_call_evaluation_prompt_instructions():
     """Test that tool call prompt has specific parsing instructions."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=True,
@@ -416,7 +416,7 @@ def test_build_tool_call_evaluation_prompt_instructions():
 
 def test_build_tool_call_evaluation_prompt_with_order_false():
     """Test that prompt adapts when order doesn't matter."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,  # Order doesn't matter
@@ -437,7 +437,7 @@ def test_build_tool_call_evaluation_prompt_with_order_false():
 
 def test_params_validation_none_no_check():
     """Test that params=None means no parameter validation."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,
@@ -461,7 +461,7 @@ def test_params_validation_none_no_check():
 
 def test_params_validation_empty_dict_check_no_params():
     """Test that params={} means check for NO parameters."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,
@@ -487,7 +487,7 @@ def test_params_validation_empty_dict_check_no_params():
 
 def test_params_validation_specified_params():
     """Test that params with values means check specified parameters."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,
@@ -522,7 +522,7 @@ def test_params_validation_specified_params():
 
 def test_params_strict_mode_false_allows_extra():
     """Test that params_strict_mode=False allows extra parameters."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,
@@ -547,7 +547,7 @@ def test_params_strict_mode_false_allows_extra():
 
 def test_params_strict_mode_true_requires_exact():
     """Test that params_strict_mode=True requires exact parameter match."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,
@@ -574,7 +574,7 @@ def test_params_strict_mode_true_requires_exact():
 
 def test_params_mixed_validation_modes():
     """Test mixing different params validation modes in one criterion."""
-    from rubric_kit.schema import ToolCalls, ToolSpec
+    from rubric_kit.models.schema import ToolCalls, ToolSpec
 
     tool_calls = ToolCalls(
         respect_order=False,

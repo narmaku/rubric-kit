@@ -13,7 +13,7 @@ from tabulate import tabulate
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from rubric_kit.schema import JudgePanelConfig
+    from rubric_kit.models.schema import JudgePanelConfig
 
 # Constants
 DEFAULT_CSV_FIELDS = ["criterion_name", "category", "dimension", "result", "score", "max_score"]

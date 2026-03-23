@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 from pydantic import ValidationError
 
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Criterion,
     Dimension,

@@ -2,7 +2,7 @@
 
 import pytest
 
-from rubric_kit.schema import Criterion, Dimension, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
 
 @pytest.fixture
@@ -51,7 +51,7 @@ def simple_rubric():
 
 def test_evaluate_binary_criterion_pass():
     """Test evaluating a binary criterion that passes."""
-    from rubric_kit.processor import evaluate_binary_criterion
+    from rubric_kit.core.processor import evaluate_binary_criterion
 
     criterion = Criterion(name="test", weight=3, dimension="factual_correctness", criterion="Test")
 
@@ -65,7 +65,7 @@ def test_evaluate_binary_criterion_pass():
 
 def test_evaluate_binary_criterion_fail():
     """Test evaluating a binary criterion that fails."""
-    from rubric_kit.processor import evaluate_binary_criterion
+    from rubric_kit.core.processor import evaluate_binary_criterion
 
     criterion = Criterion(name="test", weight=3, dimension="factual_correctness", criterion="Test")
 
@@ -78,7 +78,7 @@ def test_evaluate_binary_criterion_fail():
 
 def test_evaluate_score_criterion():
     """Test evaluating a score-based criterion."""
-    from rubric_kit.processor import evaluate_score_criterion
+    from rubric_kit.core.processor import evaluate_score_criterion
 
     criterion = Criterion(
         name="test", weight="from_scores", dimension="usefulness", criterion="from_scores"
@@ -126,7 +126,7 @@ def test_evaluate_score_criterion():
 
 def test_evaluate_rubric(simple_rubric):
     """Test evaluating a complete rubric."""
-    from rubric_kit.processor import evaluate_rubric
+    from rubric_kit.core.processor import evaluate_rubric
 
     # Provide evaluation inputs
     evaluations = {
@@ -148,7 +148,7 @@ def test_evaluate_rubric(simple_rubric):
 
 def test_calculate_total_score():
     """Test calculating total score from results."""
-    from rubric_kit.processor import calculate_total_score
+    from rubric_kit.core.processor import calculate_total_score
 
     results = [
         {"criterion_name": "test1", "score": 3, "max_score": 3},
@@ -163,7 +163,7 @@ def test_calculate_total_score():
 
 def test_calculate_percentage_score():
     """Test calculating percentage score."""
-    from rubric_kit.processor import calculate_percentage_score
+    from rubric_kit.core.processor import calculate_percentage_score
 
     results = [
         {"criterion_name": "test1", "score": 3, "max_score": 3},
@@ -176,7 +176,7 @@ def test_calculate_percentage_score():
 
 def test_weight_zero_criterion():
     """Test that weight 0 criteria are handled correctly."""
-    from rubric_kit.processor import evaluate_binary_criterion
+    from rubric_kit.core.processor import evaluate_binary_criterion
 
     criterion = Criterion(
         name="test",

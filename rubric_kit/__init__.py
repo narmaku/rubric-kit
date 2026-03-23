@@ -22,8 +22,11 @@ from rubric_kit.api import (
     refine,
 )
 
+# Exceptions
+from rubric_kit.io.validator import RubricValidationError
+
 # Core domain models
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Criterion,
     Dimension,
@@ -32,9 +35,6 @@ from rubric_kit.schema import (
     JudgePanelConfig,
     Rubric,
 )
-
-# Exceptions
-from rubric_kit.validator import RubricValidationError
 
 
 __all__ = [

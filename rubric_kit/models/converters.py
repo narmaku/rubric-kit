@@ -6,7 +6,7 @@ for YAML/JSON serialization, and rebuilding objects from dictionaries.
 
 from typing import Any
 
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Criterion,
     Dimension,

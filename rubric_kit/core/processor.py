@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from rubric_kit.schema import Criterion, Dimension, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
 
 def _calculate_tool_criterion_score(

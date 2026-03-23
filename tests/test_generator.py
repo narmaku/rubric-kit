@@ -14,7 +14,7 @@ from rubric_kit.generator import (
     parse_qa_input,
     repair_json,
 )
-from rubric_kit.schema import Criterion, Dimension, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
 
 class TestQAInputParsing:

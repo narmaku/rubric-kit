@@ -9,7 +9,7 @@ import pytest
 
 def test_load_valid_rubric():
     """Test loading a valid rubric YAML file."""
-    from rubric_kit.validator import load_rubric
+    from rubric_kit.io.validator import load_rubric
 
     yaml_content = """
 dimensions:
@@ -46,7 +46,7 @@ criteria:
 
 def test_load_invalid_yaml_syntax():
     """Test loading YAML with invalid syntax."""
-    from rubric_kit.validator import RubricValidationError, load_rubric
+    from rubric_kit.io.validator import RubricValidationError, load_rubric
 
     yaml_content = """
 dimensions:
@@ -68,7 +68,7 @@ dimensions:
 
 def test_load_invalid_rubric_structure():
     """Test loading YAML with invalid rubric structure."""
-    from rubric_kit.validator import RubricValidationError, load_rubric
+    from rubric_kit.io.validator import RubricValidationError, load_rubric
 
     yaml_content = """
 dimensions:
@@ -96,7 +96,7 @@ criteria:
 
 def test_load_nonexistent_file():
     """Test loading a non-existent file."""
-    from rubric_kit.validator import RubricValidationError, load_rubric
+    from rubric_kit.io.validator import RubricValidationError, load_rubric
 
     with pytest.raises(RubricValidationError, match="File not found"):
         load_rubric("/nonexistent/path/rubric.yaml")
@@ -104,7 +104,7 @@ def test_load_nonexistent_file():
 
 def test_load_example_yaml():
     """Test loading the example.yaml file."""
-    from rubric_kit.validator import load_rubric
+    from rubric_kit.io.validator import load_rubric
 
     # Get the project root directory
     project_root = Path(__file__).parent.parent
@@ -136,7 +136,7 @@ def test_load_example_yaml():
 
 def test_parse_nested_dict_format():
     """Test parsing the nested dict format used in example.yaml."""
-    from rubric_kit.validator import parse_nested_dict
+    from rubric_kit.io.validator import parse_nested_dict
 
     nested = {
         "item1": {"field1": "value1", "field2": "value2"},
@@ -154,7 +154,7 @@ def test_parse_nested_dict_format():
 
 def test_parse_tool_calls():
     """Test parsing tool_calls structure."""
-    from rubric_kit.validator import parse_nested_dict
+    from rubric_kit.io.validator import parse_nested_dict
 
     tool_calls_data = {
         "respect_order": True,
@@ -179,7 +179,7 @@ def test_parse_tool_calls():
 
 def test_load_judge_panel_config_basic():
     """Test loading basic judge panel configuration."""
-    from rubric_kit.validator import load_judge_panel_config
+    from rubric_kit.io.validator import load_judge_panel_config
 
     yaml_content = """
 judge_panel:
@@ -205,7 +205,7 @@ judge_panel:
 
 def test_load_judge_panel_config_multiple_judges():
     """Test loading judge panel with multiple judges."""
-    from rubric_kit.validator import load_judge_panel_config
+    from rubric_kit.io.validator import load_judge_panel_config
 
     yaml_content = """
 judge_panel:
@@ -244,7 +244,7 @@ judge_panel:
 
 def test_load_judge_panel_config_with_defaults():
     """Test loading judge panel uses defaults for missing fields."""
-    from rubric_kit.validator import load_judge_panel_config
+    from rubric_kit.io.validator import load_judge_panel_config
 
     yaml_content = """
 judge_panel:
@@ -273,7 +273,7 @@ judge_panel:
 
 def test_load_judge_panel_config_invalid():
     """Test loading invalid judge panel configuration raises error."""
-    from rubric_kit.validator import RubricValidationError, load_judge_panel_config
+    from rubric_kit.io.validator import RubricValidationError, load_judge_panel_config
 
     yaml_content = """
 judge_panel:
@@ -293,7 +293,7 @@ judge_panel:
 
 def test_load_judge_panel_config_missing_section():
     """Test loading file without judge_panel section raises error."""
-    from rubric_kit.validator import RubricValidationError, load_judge_panel_config
+    from rubric_kit.io.validator import RubricValidationError, load_judge_panel_config
 
     yaml_content = """
 dimensions:
@@ -314,7 +314,7 @@ dimensions:
 
 def test_load_judge_panel_config_from_rubric_yaml():
     """Test loading judge panel embedded in rubric YAML."""
-    from rubric_kit.validator import load_judge_panel_config
+    from rubric_kit.io.validator import load_judge_panel_config
 
     yaml_content = """
 dimensions:

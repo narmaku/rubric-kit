@@ -11,7 +11,7 @@ class TestSubstituteVariables:
 
     def test_substitute_single_variable(self):
         """Test substituting a single variable in criterion text."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {"ip_address": "10.0.187.159"}
         criterion_text = "The response correctly states the IP is '{{ip_address}}'."
@@ -22,7 +22,7 @@ class TestSubstituteVariables:
 
     def test_substitute_multiple_variables(self):
         """Test substituting multiple variables in same criterion."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {
             "os_name": "Red Hat Enterprise Linux 10.0",
@@ -39,7 +39,7 @@ class TestSubstituteVariables:
 
     def test_substitute_repeated_variable(self):
         """Test same variable used multiple times."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {"value": "42"}
         criterion_text = "Value is {{value}} and doubled is {{value}}."
@@ -50,7 +50,7 @@ class TestSubstituteVariables:
 
     def test_substitute_no_variables_in_text(self):
         """Test text without any variable placeholders."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {"unused": "value"}
         criterion_text = "Plain text without variables."
@@ -61,7 +61,7 @@ class TestSubstituteVariables:
 
     def test_substitute_empty_variables_dict(self):
         """Test with empty variables dictionary."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {}
         criterion_text = "No variables defined."
@@ -72,7 +72,7 @@ class TestSubstituteVariables:
 
     def test_substitute_undefined_variable_raises_error(self):
         """Test that undefined variable raises clear error."""
-        from rubric_kit.validator import RubricValidationError, substitute_variables
+        from rubric_kit.io.validator import RubricValidationError, substitute_variables
 
         variables = {"defined_var": "value"}
         criterion_text = "Uses {{undefined_var}} which is not defined."
@@ -82,7 +82,7 @@ class TestSubstituteVariables:
 
     def test_substitute_with_special_chars_in_value(self):
         """Test variable values containing special characters."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {"path": "/dev/vda2", "percentage": "20.2%"}
         criterion_text = "Disk {{path}} is {{percentage}} full."
@@ -93,7 +93,7 @@ class TestSubstituteVariables:
 
     def test_substitute_with_none_input(self):
         """Test that None input returns None."""
-        from rubric_kit.validator import substitute_variables
+        from rubric_kit.io.validator import substitute_variables
 
         variables = {"var": "value"}
 
@@ -107,7 +107,7 @@ class TestLoadRubricWithVariables:
 
     def test_load_rubric_with_variables(self):
         """Test loading a rubric file that contains variables."""
-        from rubric_kit.validator import load_rubric
+        from rubric_kit.io.validator import load_rubric
 
         yaml_content = """
 variables:
@@ -154,7 +154,7 @@ criteria:
 
     def test_load_rubric_without_variables(self):
         """Test loading a rubric file without variables section still works."""
-        from rubric_kit.validator import load_rubric
+        from rubric_kit.io.validator import load_rubric
 
         yaml_content = """
 dimensions:
@@ -186,7 +186,7 @@ criteria:
 
     def test_load_rubric_undefined_variable_error(self):
         """Test that undefined variable in criterion raises error."""
-        from rubric_kit.validator import RubricValidationError, load_rubric
+        from rubric_kit.io.validator import RubricValidationError, load_rubric
 
         yaml_content = """
 variables:
@@ -216,7 +216,7 @@ criteria:
 
     def test_load_rubric_substitutes_variables_in_tool_params(self):
         """Test that variables are substituted in tool_calls params."""
-        from rubric_kit.validator import load_rubric
+        from rubric_kit.io.validator import load_rubric
 
         yaml_content = """
 variables:
@@ -266,7 +266,7 @@ criteria:
 
     def test_load_rubric_with_external_variables_file(self):
         """Test loading rubric with placeholders and separate variables file."""
-        from rubric_kit.validator import load_rubric
+        from rubric_kit.io.validator import load_rubric
 
         # Rubric with placeholders but NO embedded variables
         rubric_content = """
@@ -309,7 +309,7 @@ ip_address: "192.168.1.100"
 
     def test_load_rubric_external_variables_override_embedded(self):
         """Test that external variables override embedded ones."""
-        from rubric_kit.validator import load_rubric
+        from rubric_kit.io.validator import load_rubric
 
         # Rubric with embedded variables
         rubric_content = """
@@ -357,7 +357,7 @@ class TestRubricSchemaWithVariables:
 
     def test_rubric_model_accepts_variables(self):
         """Test that Rubric model accepts variables field."""
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         dimensions = [Dimension(name="test", description="Test dimension", grading_type="binary")]
         criteria = [
@@ -377,7 +377,7 @@ class TestRubricSchemaWithVariables:
 
     def test_rubric_model_variables_optional(self):
         """Test that variables field is optional."""
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         dimensions = [Dimension(name="test", description="Test dimension", grading_type="binary")]
         criteria = [
@@ -402,7 +402,7 @@ class TestGeneratorWithVariables:
     def test_generator_response_includes_variables(self):
         """Test that the generator can produce rubrics with a variables section."""
         from rubric_kit.generator import _convert_to_criteria, _convert_to_dimensions
-        from rubric_kit.schema import Rubric
+        from rubric_kit.models.schema import Rubric
 
         # Simulate an LLM response that includes variables
         llm_response = {
@@ -510,8 +510,8 @@ class TestRubricYAMLOutput:
 
     def test_convert_rubric_to_yaml_dict_includes_variables(self):
         """Test that convert_rubric_to_yaml_dict includes variables section."""
-        from rubric_kit.converters import rubric_to_dict as convert_rubric_to_yaml_dict
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.converters import rubric_to_dict as convert_rubric_to_yaml_dict
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         rubric = Rubric(
             dimensions=[Dimension(name="test", description="Test dim", grading_type="binary")],
@@ -536,8 +536,8 @@ class TestRubricYAMLOutput:
 
     def test_convert_rubric_to_yaml_dict_no_variables(self):
         """Test that rubric without variables doesn't have variables section."""
-        from rubric_kit.converters import rubric_to_dict as convert_rubric_to_yaml_dict
-        from rubric_kit.schema import Criterion, Dimension, Rubric
+        from rubric_kit.models.converters import rubric_to_dict as convert_rubric_to_yaml_dict
+        from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
         rubric = Rubric(
             dimensions=[Dimension(name="test", description="Test dim", grading_type="binary")],
@@ -558,8 +558,8 @@ class TestRubricYAMLOutput:
 
     def test_chat_criteria_generation_prompt_includes_variable_instructions(self):
         """Test that chat criteria generation prompt includes variable extraction instructions."""
+        from rubric_kit.models.schema import Dimension
         from rubric_kit.prompts import build_chat_criteria_generation_prompt
-        from rubric_kit.schema import Dimension
 
         dimensions = [
             Dimension(

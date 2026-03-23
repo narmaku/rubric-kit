@@ -1,16 +1,18 @@
 """Rubric generation using LLM."""
 
+from __future__ import annotations
+
 import json
 import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 import yaml
 
-from rubric_kit.schema import Criterion, Dimension, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
 
 if TYPE_CHECKING:
@@ -320,9 +322,9 @@ def _normalize_scores(scores: Any) -> dict[int, str] | None:
     """Normalize scores from various LLM response formats to Dict[int, str].
 
     Handles:
-    - Dict[str|int, str]: Standard format, just convert keys to int
-    - List[Dict]: List of single-key dicts like [{1: "Bad"}, {2: "Good"}]
-    - List[List]: List of pairs like [[1, "Bad"], [2, "Good"]]
+    - dict[str | int, str]: Standard format, just convert keys to int
+    - list[dict]: List of single-key dicts like [{1: "Bad"}, {2: "Good"}]
+    - list[list]: List of pairs like [[1, "Bad"], [2, "Good"]]
 
     Skips entries with non-integer keys (e.g., "score", "description").
     """
@@ -508,7 +510,7 @@ class RubricGenerator:
         api_key: str | None = None,
         model: str = "gpt-4",
         base_url: str | None = None,
-        metrics: Optional["MetricsAggregator"] = None,
+        metrics: MetricsAggregator | None = None,
     ):
         """
         Initialize RubricGenerator.
