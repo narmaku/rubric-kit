@@ -16,6 +16,7 @@ from rubric_kit.models.schema import Criterion, Dimension, JudgeConfig, JudgePan
 
 if TYPE_CHECKING:
     from rubric_kit.metrics import MetricsAggregator
+
 from rubric_kit.core.consensus import apply_binary_consensus, apply_score_consensus
 from rubric_kit.core.execution import execute_judges
 from rubric_kit.core.tool_evaluator import (

@@ -8,7 +8,6 @@ from typing import Any
 
 import yaml
 
-from rubric_kit import converters
 from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
 from rubric_kit.core.processor import (
     calculate_percentage_score,
@@ -17,6 +16,7 @@ from rubric_kit.core.processor import (
 )
 from rubric_kit.io.output import print_evaluation_config
 from rubric_kit.io.validator import load_judge_panel_config, load_rubric, substitute_variables
+from rubric_kit.models import converters
 from rubric_kit.models.schema import (
     ArenaContestant,
     ArenaSpec,

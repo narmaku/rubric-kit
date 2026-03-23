@@ -15,7 +15,6 @@ from typing import Any
 import yaml
 
 import rubric_kit.api as api
-from rubric_kit import converters
 from rubric_kit.arena import run_arena_from_outputs, run_arena_from_spec
 from rubric_kit.cli.parser import create_parser
 from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
@@ -39,6 +38,7 @@ from rubric_kit.io.output import (
 )
 from rubric_kit.io.validator import RubricValidationError, load_judge_panel_config, load_rubric
 from rubric_kit.metrics import MetricsAggregator, estimate_cost, estimate_tokens
+from rubric_kit.models import converters
 from rubric_kit.models.schema import (
     ConsensusConfig,
     Dimension,

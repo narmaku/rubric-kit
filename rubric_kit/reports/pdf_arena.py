@@ -22,7 +22,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from rubric_kit.reports.pdf_base import (
+from .pdf_base import (
     _create_input_section,
     _create_judges_panel_summary,
     _create_results_table,
