@@ -384,6 +384,9 @@ Examples:
     parser.add_argument(
         "--no-table", action="store_true", help="Do not print results table to console"
     )
+    parser.add_argument(
+        "--no-metrics", action="store_true", help="Disable metrics collection in output"
+    )
 
     return parser
 

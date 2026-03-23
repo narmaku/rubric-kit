@@ -783,6 +783,63 @@ class TestArenaFromOutputsCLI:
         assert os.path.exists(pdf_path)
 
 
+class TestCombineOutputsDuplicateIdDetection:
+    """Test that combine_outputs_to_arena detects duplicate contestant IDs."""
+
+    def _make_output(self, score: int = 3, max_score: int = 3, title: str = "Model") -> dict:
+        """Create a minimal evaluation output dict."""
+        return {
+            "results": [
+                {
+                    "criterion_name": "c1",
+                    "dimension": "d1",
+                    "score": score,
+                    "max_score": max_score,
+                    "result": "pass" if score == max_score else "fail",
+                    "reason": f"Score {score}",
+                }
+            ],
+            "summary": {
+                "total_score": score,
+                "max_score": max_score,
+                "percentage": round(score / max_score * 100, 1) if max_score else 0.0,
+            },
+            "rubric": {"dimensions": [], "criteria": []},
+            "judge_panel": {"judges": []},
+            "input": {"type": "chat_session", "source_file": "input.txt"},
+            "metadata": {"report_title": title},
+        }
+
+    def test_same_file_twice_produces_unique_ids(self, tmp_path):
+        """Test that passing the same file twice produces unique IDs due to different indices."""
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        file1 = tmp_path / "output.yaml"
+        with open(file1, "w") as f:
+            yaml.dump(self._make_output(score=3, title="First"), f)
+
+        result = combine_outputs_to_arena([str(file1), str(file1)])
+        assert len(result["contestants"]) == 2  # Different indices = different IDs
+
+    def test_explicit_duplicate_id_collision_raises_error(self, tmp_path):
+        """Test that an explicit ID collision raises ValueError."""
+        from unittest.mock import patch
+
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        file1 = tmp_path / "a.yaml"
+        file2 = tmp_path / "b.yaml"
+        with open(file1, "w") as f:
+            yaml.dump(self._make_output(score=3, title="First"), f)
+        with open(file2, "w") as f:
+            yaml.dump(self._make_output(score=1, title="Second"), f)
+
+        # Force _generate_contestant_id to return the same ID for both files
+        with patch("rubric_kit.arena._generate_contestant_id", return_value="duplicate-id"):
+            with pytest.raises(ValueError, match="Duplicate contestant ID"):
+                combine_outputs_to_arena([str(file1), str(file2)])
+
+
 class TestArenaPDFExport:
     """Test arena PDF export functionality."""
 
@@ -891,3 +948,40 @@ class TestArenaPDFExport:
 
         with pytest.raises(ValueError, match="not an arena evaluation"):
             export_arena_pdf(str(regular_file), str(pdf_path))
+
+
+class TestArenaLogging:
+    """Test that arena module uses logging instead of print."""
+
+    def _make_output(self, score: int = 3, max_score: int = 3, title: str = "Model") -> dict:
+        return {
+            "results": [
+                {"criterion_name": "c1", "dimension": "d1", "score": score, "max_score": max_score}
+            ],
+            "summary": {
+                "total_score": score,
+                "max_score": max_score,
+                "percentage": round(score / max_score * 100, 1) if max_score else 0.0,
+            },
+            "rubric": {"dimensions": [], "criteria": []},
+            "judge_panel": {"judges": []},
+            "input": {"type": "chat_session", "source_file": "input.txt"},
+            "metadata": {"report_title": title},
+        }
+
+    def test_combine_outputs_uses_logging(self, tmp_path):
+        """Test that combine_outputs_to_arena uses logging, not print."""
+        from unittest.mock import patch
+
+        from rubric_kit.arena import combine_outputs_to_arena
+
+        file1 = tmp_path / "out1.yaml"
+        with open(file1, "w") as f:
+            yaml.dump(self._make_output(score=3, title="A"), f)
+
+        with patch("rubric_kit.arena.logger") as mock_logger:
+            combine_outputs_to_arena([str(file1)], "Test")
+
+        assert mock_logger.info.called, (
+            "combine_outputs_to_arena should use logger.info instead of print"
+        )

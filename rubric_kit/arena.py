@@ -1,7 +1,7 @@
 """Arena evaluation module for comparing multiple contestants against a shared rubric."""
 
+import logging
 import os
-import sys
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -24,6 +24,9 @@ from rubric_kit.schema import (
     ToolSpec,
 )
 from rubric_kit.validator import load_judge_panel_config, load_rubric, substitute_variables
+
+
+logger = logging.getLogger(__name__)
 
 
 # Default evaluator functions (can be overridden for testing via dependency injection)
@@ -157,11 +160,12 @@ def combine_outputs_to_arena(
 ) -> dict[str, Any]:
     """Combine multiple evaluation output files into arena format."""
     contestants_results: dict[str, Any] = {}
+    seen_ids: set[str] = set()
     shared_rubric = None
     shared_judge_panel = None
 
     for idx, output_file in enumerate(output_files):
-        print(f"\n[{idx + 1}/{len(output_files)}] Loading: {output_file}")
+        logger.info("[%d/%d] Loading: %s", idx + 1, len(output_files), output_file)
 
         if not os.path.exists(output_file):
             raise FileNotFoundError(f"Output file not found: {output_file}")
@@ -176,16 +180,24 @@ def combine_outputs_to_arena(
             raise ValueError(f"File missing 'results' section: {output_file}")
 
         contestant_id = _generate_contestant_id(idx, output_file)
+        if contestant_id in seen_ids:
+            raise ValueError(
+                f"Duplicate contestant ID '{contestant_id}' generated from file: {output_file}"
+            )
+        seen_ids.add(contestant_id)
         metadata = data.get("metadata", {})
         basename = os.path.splitext(os.path.basename(output_file))[0]
         contestant_name = metadata.get("report_title", basename)
         input_info = data.get("input", {})
         summary = data.get("summary", {})
 
-        print(f"   ID: {contestant_id}")
-        print(f"   Name: {contestant_name}")
-        print(
-            f"   Score: {summary.get('total_score', 0)}/{summary.get('max_score', 0)} ({summary.get('percentage', 0):.1f}%)"
+        logger.info("   ID: %s", contestant_id)
+        logger.info("   Name: %s", contestant_name)
+        logger.info(
+            "   Score: %s/%s (%.1f%%)",
+            summary.get("total_score", 0),
+            summary.get("max_score", 0),
+            summary.get("percentage", 0),
         )
 
         contestants_results[contestant_id] = {
@@ -299,7 +311,7 @@ def _evaluate_contestant(
 
     if contestant_vars:
         rubric = apply_variables_to_rubric(base_rubric, contestant_vars)
-        print(f"   Variables: {len(contestant_vars)}")
+        logger.info("   Variables: %d", len(contestant_vars))
     else:
         rubric = base_rubric
 
@@ -307,7 +319,7 @@ def _evaluate_contestant(
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Input file not found: {input_path}")
 
-    print(f"   Input: {contestant.input_type} from {contestant.input_file}")
+    logger.info("   Input: %s from %s", contestant.input_type, contestant.input_file)
 
     if contestant.input_type == "qna":
         evaluations = evaluate_panel_qa(rubric, input_path, panel_config)
@@ -318,7 +330,7 @@ def _evaluate_contestant(
     total_score, max_score = calculate_total_score(results)
     percentage = calculate_percentage_score(results)
 
-    print(f"   ✓ Score: {total_score}/{max_score} ({percentage:.1f}%)")
+    logger.info("   Score: %d/%d (%.1f%%)", total_score, max_score, percentage)
 
     return {
         "name": contestant.name,
@@ -338,20 +350,20 @@ def _load_cached_results(output_file: str, force: bool) -> dict[str, Any]:
     """Load existing results from output file if available."""
     if not os.path.exists(output_file) or force:
         if force:
-            print("\n🔄 Force mode: will re-evaluate all contestants")
+            logger.info("Force mode: will re-evaluate all contestants")
         return {}
 
-    print(f"\n📂 Found existing results in {output_file}")
+    logger.info("Found existing results in %s", output_file)
     try:
         with open(output_file, encoding="utf-8") as f:
             existing_data = yaml.safe_load(f)
         if existing_data and existing_data.get("mode") == "arena":
             existing_results = existing_data.get("contestants", {})
-            print(f"   ✓ Loaded {len(existing_results)} cached contestant results")
-            print("   (Use --force to re-evaluate all)")
+            logger.info("Loaded %d cached contestant results", len(existing_results))
+            logger.info("(Use --force to re-evaluate all)")
             return existing_results
     except Exception as e:
-        print(f"   ⚠ Could not load existing results: {e}")
+        logger.warning("Could not load existing results: %s", e)
 
     return {}
 
@@ -369,27 +381,29 @@ def run_arena_from_spec(
     include_input: bool = False,
 ) -> int:
     """Run arena evaluation from specification file."""
-    print(f"Loading arena specification from {arena_spec_file}...")
+    logger.info("Loading arena specification from %s...", arena_spec_file)
     arena_spec = load_arena_spec(arena_spec_file)
     arena_name = arena_spec.name or "Arena Evaluation"
-    print(f"✓ Loaded arena: {arena_name}")
-    print(f"   Contestants: {len(arena_spec.contestants)}")
+    logger.info("Loaded arena: %s", arena_name)
+    logger.info("   Contestants: %d", len(arena_spec.contestants))
 
     existing_results = _load_cached_results(output_file, force)
 
     base_dir = os.path.dirname(os.path.abspath(arena_spec_file))
 
     rubric_path = os.path.join(base_dir, arena_spec.rubric_file)
-    print(f"\nLoading shared rubric from {rubric_path}...")
+    logger.info("Loading shared rubric from %s...", rubric_path)
     base_rubric = load_rubric(rubric_path, require_variables=False)
-    print(
-        f"✓ Loaded {len(base_rubric.dimensions)} dimensions and {len(base_rubric.criteria)} criteria"
+    logger.info(
+        "Loaded %d dimensions and %d criteria",
+        len(base_rubric.dimensions),
+        len(base_rubric.criteria),
     )
 
     panel_path = os.path.join(base_dir, arena_spec.judges_panel_file)
-    print(f"\nLoading judge panel from {panel_path}...")
+    logger.info("Loading judge panel from %s...", panel_path)
     panel_config = load_judge_panel_config(panel_path)
-    print(f"✓ Loaded panel with {len(panel_config.judges)} judge(s)")
+    logger.info("Loaded panel with %d judge(s)", len(panel_config.judges))
     print_evaluation_config(panel_config)
 
     contestants_results: dict[str, Any] = dict(existing_results)
@@ -397,23 +411,31 @@ def run_arena_from_spec(
     skipped_count = 0
     evaluated_count = 0
 
-    print(f"\n{'=' * 80}")
-    print("ARENA EVALUATION")
-    print(f"{'=' * 80}")
+    logger.info("=" * 80)
+    logger.info("ARENA EVALUATION")
+    logger.info("=" * 80)
 
     for idx, contestant in enumerate(arena_spec.contestants, 1):
         if contestant.id in existing_results:
             cached = existing_results[contestant.id]
             cached_pct = cached.get("summary", {}).get("percentage", 0)
-            print(
-                f"\n[{idx}/{len(arena_spec.contestants)}] {contestant.name} (id: {contestant.id})"
+            logger.info(
+                "[%d/%d] %s (id: %s)",
+                idx,
+                len(arena_spec.contestants),
+                contestant.name,
+                contestant.id,
             )
-            print(f"   ⏭️  Skipped (cached: {cached_pct:.1f}%)")
+            logger.info("   Skipped (cached: %.1f%%)", cached_pct)
             skipped_count += 1
             continue
 
-        print(
-            f"\n[{idx}/{len(arena_spec.contestants)}] Evaluating: {contestant.name} (id: {contestant.id})"
+        logger.info(
+            "[%d/%d] Evaluating: %s (id: %s)",
+            idx,
+            len(arena_spec.contestants),
+            contestant.name,
+            contestant.id,
         )
 
         try:
@@ -437,7 +459,7 @@ def run_arena_from_spec(
                 report_title,
             )
         except Exception as e:
-            print(f"   ❌ Failed: {e}", file=sys.stderr)
+            logger.error("   Failed: %s", e)
             failed_contestants.append(contestant.id)
 
     _print_evaluation_summary(evaluated_count, skipped_count, failed_contestants)
@@ -455,7 +477,7 @@ def run_arena_from_spec(
         failed_contestants,
     )
 
-    print(f"\nWriting arena results to {output_file}...")
+    logger.info("Writing arena results to %s...", output_file)
     with open(output_file, "w", encoding="utf-8") as f:
         yaml.dump(output_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
 
@@ -464,7 +486,7 @@ def run_arena_from_spec(
         if failed_contestants
         else " - complete"
     )
-    print(f"✓ Arena results written (YAML){status}")
+    logger.info("Arena results written (YAML)%s", status)
 
     if report_file:
         _generate_arena_report(output_file, report_file, pdf_exporter, include_input=include_input)
@@ -484,7 +506,7 @@ def run_arena_from_outputs(
     include_input: bool = False,
 ) -> int:
     """Combine existing output files into arena format."""
-    print(f"Combining {len(output_files)} evaluation outputs into arena format...")
+    logger.info("Combining %d evaluation outputs into arena format...", len(output_files))
 
     arena_name = report_title or "Combined Arena Evaluation"
     output_data = combine_outputs_to_arena(output_files, arena_name)
@@ -492,10 +514,10 @@ def run_arena_from_outputs(
     if report_title:
         output_data["metadata"]["report_title"] = report_title
 
-    print(f"\nWriting arena results to {output_file}...")
+    logger.info("Writing arena results to %s...", output_file)
     with open(output_file, "w", encoding="utf-8") as f:
         yaml.dump(output_data, f, sort_keys=False, default_flow_style=False, allow_unicode=True)
-    print("✓ Arena results written (YAML)")
+    logger.info("Arena results written (YAML)")
 
     if report_file:
         _generate_arena_report(output_file, report_file, include_input=include_input)
@@ -508,15 +530,15 @@ def run_arena_from_outputs(
 
 def _print_evaluation_summary(evaluated: int, skipped: int, failed: list[str]) -> None:
     """Print summary of arena evaluation."""
-    print(f"\n{'=' * 80}")
-    print("EVALUATION SUMMARY")
-    print(f"{'=' * 80}")
-    print(f"   Evaluated: {evaluated}")
-    print(f"   Skipped (cached): {skipped}")
-    print(f"   Failed: {len(failed)}")
+    logger.info("=" * 80)
+    logger.info("EVALUATION SUMMARY")
+    logger.info("=" * 80)
+    logger.info("   Evaluated: %d", evaluated)
+    logger.info("   Skipped (cached): %d", skipped)
+    logger.info("   Failed: %d", len(failed))
     if failed:
-        print(f"   Failed IDs: {', '.join(failed)}")
-        print("   (Fix the issues and re-run to complete these evaluations)")
+        logger.info("   Failed IDs: %s", ", ".join(failed))
+        logger.info("   (Fix the issues and re-run to complete these evaluations)")
 
 
 def _build_arena_output(
@@ -565,28 +587,27 @@ def _generate_arena_report(
     include_input: bool = False,
 ) -> None:
     """Generate PDF report for arena results."""
-    print(f"\nGenerating Arena PDF report to {report_file}...")
+    logger.info("Generating Arena PDF report to %s...", report_file)
     try:
         exporter = pdf_exporter or export_arena_pdf
         exporter(output_file, report_file, include_input=include_input)
-        print("✓ Arena PDF report generated")
+        logger.info("Arena PDF report generated")
     except Exception as e:
-        print(f"⚠ PDF generation failed: {e}", file=sys.stderr)
+        logger.error("PDF generation failed: %s", e)
 
 
 def _print_arena_rankings(rankings: list[dict[str, Any]]) -> None:
     """Print arena rankings to console."""
-    print(f"\n{'=' * 80}")
-    print("ARENA RANKINGS")
-    print(f"{'=' * 80}\n")
+    logger.info("=" * 80)
+    logger.info("ARENA RANKINGS")
+    logger.info("=" * 80)
 
     for r in rankings:
-        medal = (
-            "🥇"
-            if r["rank"] == 1
-            else ("🥈" if r["rank"] == 2 else ("🥉" if r["rank"] == 3 else "  "))
+        logger.info(
+            "#%d: %s - %.1f%% (%d/%d)",
+            r["rank"],
+            r["name"],
+            r["percentage"],
+            r["total_score"],
+            r["max_score"],
         )
-        print(
-            f"{medal} #{r['rank']}: {r['name']} - {r['percentage']:.1f}% ({r['total_score']}/{r['max_score']})"
-        )
-    print()

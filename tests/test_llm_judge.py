@@ -776,3 +776,61 @@ def test_judge_panel_with_varied_parameters(simple_rubric, sample_chat_session_f
         assert call_params[1]["temperature"] == 0.7  # Judge 2: custom temperature
         assert call_params[1]["top_p"] == 0.9  # Judge 2: custom top_p
         # Judge 3 should use defaults (checked via EVALUATOR_CONFIG)
+
+
+# ============================================================================
+# Logging Tests
+# ============================================================================
+
+
+def test_parse_chat_session_logs_instead_of_print(sample_chat_session_file):
+    """Test that _parse_chat_session_safe uses logging instead of print."""
+
+    from rubric_kit.llm_judge import _parse_chat_session_safe, read_chat_session
+
+    chat_content = read_chat_session(sample_chat_session_file)
+
+    with patch("rubric_kit.llm_judge.logger") as mock_logger:
+        _parse_chat_session_safe(chat_content, use_parser=True)
+
+    # Should have called logger.info or logger.debug, not print
+    assert mock_logger.info.called or mock_logger.debug.called, (
+        "_parse_chat_session_safe should use logger instead of print"
+    )
+
+
+def test_tool_evaluation_warning_uses_logging():
+    """Test that tool evaluation warnings use logging instead of print."""
+
+    from rubric_kit.llm_judge import _evaluate_tool_calls_hybrid
+    from rubric_kit.schema import ToolCalls
+
+    criterion = Criterion(
+        name="test_tool",
+        category="Tools",
+        weight=3,
+        dimension="test_dim",
+        tool_calls=ToolCalls(required=[], optional=[], prohibited=[]),
+    )
+
+    judge_config = JudgeConfig(name="test", model="gpt-4")
+
+    with (
+        patch("rubric_kit.llm_judge.evaluate_tool_calls_programmatic") as mock_prog,
+        patch("rubric_kit.llm_judge.build_param_validation_prompt", return_value=None),
+        patch("rubric_kit.llm_judge.build_summary_prompt", return_value="summary"),
+        patch("rubric_kit.llm_judge._call_llm", side_effect=Exception("LLM error")),
+        patch("rubric_kit.llm_judge.logger") as mock_logger,
+    ):
+        mock_breakdown = MagicMock()
+        mock_breakdown.overall_pass = True
+        mock_breakdown.overall_score = 3.0
+        mock_breakdown.summary = None
+        mock_prog.return_value = mock_breakdown
+
+        _evaluate_tool_calls_hybrid(criterion, None, judge_config)
+
+    # Should use logger.warning for the error, not print
+    assert mock_logger.warning.called, (
+        "Tool evaluation errors should use logger.warning instead of print"
+    )

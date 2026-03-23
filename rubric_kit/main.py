@@ -1,5 +1,6 @@
 """Main CLI entry point for rubric-kit."""
 
+import logging
 import os
 import sys
 import tempfile
@@ -1253,9 +1254,16 @@ def cmd_rerun(args) -> int:
     # Determine input source
     input_file, input_type, input_content = _resolve_rerun_input(args, data)
 
+    # Create metrics aggregator unless disabled
+    metrics = None
+    if not getattr(args, "no_metrics", False):
+        metrics = MetricsAggregator()
+
     # Evaluate
     print_evaluation_config(panel_config)
-    evaluations = _run_rerun_evaluation(rubric, input_file, input_type, input_content, panel_config)
+    evaluations = _run_rerun_evaluation(
+        rubric, input_file, input_type, input_content, panel_config, metrics=metrics
+    )
     print(f"✓ Evaluated {len(evaluations)} criteria")
 
     # Process scores
@@ -1274,8 +1282,16 @@ def cmd_rerun(args) -> int:
         input_content,
     )
 
+    # Add metrics if collected
+    if metrics is not None:
+        output_data["metrics"] = metrics.to_dict()
+
     output_file = ensure_yaml_extension(args.output_file)
     _write_yaml_output(output_file, output_data)
+
+    # Print metrics summary
+    if metrics is not None:
+        _print_metrics_summary(metrics)
 
     if args.report:
         _generate_pdf_report(output_file, args.report)
@@ -1361,10 +1377,12 @@ def _extract_embedded_content(input_data: dict[str, Any], input_type: str) -> st
     return None
 
 
-def _run_rerun_evaluation(rubric, input_file, input_type, input_content, panel_config):
+def _run_rerun_evaluation(
+    rubric, input_file, input_type, input_content, panel_config, metrics=None
+):
     """Run evaluation for rerun command."""
     if input_file:
-        return _run_evaluation(rubric, input_file, input_type, panel_config)
+        return _run_evaluation(rubric, input_file, input_type, panel_config, metrics=metrics)
 
     # Use embedded content - write to temp file
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
@@ -1372,7 +1390,7 @@ def _run_rerun_evaluation(rubric, input_file, input_type, input_content, panel_c
         temp_file = f.name
 
     try:
-        return _run_evaluation(rubric, temp_file, input_type, panel_config)
+        return _run_evaluation(rubric, temp_file, input_type, panel_config, metrics=metrics)
     finally:
         os.unlink(temp_file)
 
@@ -1482,8 +1500,25 @@ COMMAND_HANDLERS = {
 }
 
 
+def _configure_logging() -> None:
+    """Configure logging for CLI usage.
+
+    Sets up a console handler for the rubric_kit namespace so that
+    library log messages (INFO, WARNING, ERROR) are visible to CLI users.
+    Library users can configure their own handlers without interference
+    since this only adds a handler to the rubric_kit logger.
+    """
+    rubric_logger = logging.getLogger("rubric_kit")
+    if not rubric_logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        rubric_logger.addHandler(handler)
+        rubric_logger.setLevel(logging.INFO)
+
+
 def main() -> int:
     """Main CLI entry point with subcommands."""
+    _configure_logging()
     parser = create_parser(command_handlers=COMMAND_HANDLERS)
     args = parser.parse_args()
 
