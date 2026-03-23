@@ -810,21 +810,14 @@ class TestCombineOutputsDuplicateIdDetection:
             "metadata": {"report_title": title},
         }
 
-    def test_duplicate_contestant_id_raises_error(self, tmp_path):
-        """Test that duplicate contestant IDs raise ValueError."""
+    def test_same_file_twice_produces_unique_ids(self, tmp_path):
+        """Test that passing the same file twice produces unique IDs due to different indices."""
         from rubric_kit.arena import combine_outputs_to_arena
 
-        # Create two files that would generate the same contestant ID
-        # (same index and same basename — only possible if called with same file twice)
         file1 = tmp_path / "output.yaml"
         with open(file1, "w") as f:
             yaml.dump(self._make_output(score=3, title="First"), f)
 
-        # Pass the same file twice — _generate_contestant_id uses index, so IDs differ.
-        # But if we craft a scenario where IDs collide, it should raise.
-        # The simplest collision: pass the exact same file path twice.
-        # With index-based IDs, identical paths at different indices won't collide.
-        # So this test validates that the function works correctly with unique indices.
         result = combine_outputs_to_arena([str(file1), str(file1)])
         assert len(result["contestants"]) == 2  # Different indices = different IDs
 
