@@ -16,7 +16,6 @@ import yaml
 
 import rubric_kit.api as api
 from rubric_kit.arena import run_arena_from_outputs, run_arena_from_spec
-from rubric_kit.cli.parser import create_parser
 from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
 from rubric_kit.core.processor import (
     calculate_percentage_score,
@@ -58,6 +57,8 @@ from rubric_kit.prompts import (
 )
 from rubric_kit.reports.pdf_arena import export_arena_pdf
 from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
+
+from .parser import create_parser
 
 
 # =============================================================================

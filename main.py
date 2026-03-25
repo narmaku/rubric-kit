@@ -2,7 +2,7 @@
 """Command-line entry point for rubric-kit."""
 
 import sys
-from rubric_kit.main import main
+from rubric_kit.cli.commands import main
 
 if __name__ == "__main__":
     sys.exit(main())

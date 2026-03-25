@@ -17,18 +17,6 @@ from rubric_kit.models.schema import Criterion, Dimension, JudgeConfig, JudgePan
 if TYPE_CHECKING:
     from rubric_kit.metrics import MetricsAggregator
 
-from rubric_kit.core.consensus import apply_binary_consensus, apply_score_consensus
-from rubric_kit.core.execution import execute_judges
-from rubric_kit.core.tool_evaluator import (
-    ToolBreakdown,
-    apply_param_validation_results,
-    breakdown_to_dict,
-    build_param_validation_prompt,
-    build_summary_prompt,
-    evaluate_tool_calls_programmatic,
-    parse_param_validation_response,
-    parse_summary_response,
-)
 from rubric_kit.generator import parse_qa_input
 from rubric_kit.io.parser import ChatSession, parse_chat_session
 from rubric_kit.prompts import (
@@ -37,6 +25,19 @@ from rubric_kit.prompts import (
     build_binary_criterion_prompt,
     build_score_criterion_prompt,
     build_tool_call_evaluation_prompt,
+)
+
+from .consensus import apply_binary_consensus, apply_score_consensus
+from .execution import execute_judges
+from .tool_evaluator import (
+    ToolBreakdown,
+    apply_param_validation_results,
+    breakdown_to_dict,
+    build_param_validation_prompt,
+    build_summary_prompt,
+    evaluate_tool_calls_programmatic,
+    parse_param_validation_response,
+    parse_summary_response,
 )
 
 
