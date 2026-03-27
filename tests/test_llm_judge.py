@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Criterion,
     Dimension,
@@ -105,7 +105,7 @@ def test_evaluate_criterion_with_single_judge(
     simple_rubric, sample_chat_session_file, single_judge_panel
 ):
     """Test evaluating a criterion with single judge."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]  # Binary criterion
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -137,7 +137,7 @@ def test_evaluate_criterion_with_multi_judge_consensus(
     simple_rubric, sample_chat_session_file, multi_judge_panel
 ):
     """Test evaluating a criterion with multi-judge panel reaching consensus."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]  # Binary criterion
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -168,7 +168,7 @@ def test_evaluate_criterion_with_multi_judge_no_consensus(
     simple_rubric, sample_chat_session_file, multi_judge_panel
 ):
     """Test evaluating a criterion with multi-judge panel not reaching consensus."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]  # Binary criterion
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -205,7 +205,7 @@ def test_evaluate_criterion_with_multi_judge_no_consensus(
 
 def test_evaluate_criterion_score_based(simple_rubric, sample_chat_session_file, multi_judge_panel):
     """Test evaluating a score-based criterion with multi-judge panel."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[1]  # Score criterion
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -238,7 +238,7 @@ def test_evaluate_criterion_score_based(simple_rubric, sample_chat_session_file,
 
 def test_evaluate_rubric_with_panel(simple_rubric, sample_chat_session_file, single_judge_panel):
     """Test evaluating full rubric with judge panel."""
-    from rubric_kit.llm_judge import evaluate_rubric_with_panel
+    from rubric_kit.core.llm_judge import evaluate_rubric_with_panel
 
     # Mock litellm.completion
     call_count = [0]
@@ -286,7 +286,7 @@ def test_evaluate_criterion_with_api_error(
     simple_rubric, sample_chat_session_file, single_judge_panel
 ):
     """Test handling API errors during evaluation."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -310,7 +310,7 @@ def test_evaluate_criterion_with_api_error(
 
 def test_build_consensus_reason_single_judge():
     """Test that single judge reason is returned without label."""
-    from rubric_kit.llm_judge import _build_consensus_reason
+    from rubric_kit.core.llm_judge import _build_consensus_reason
 
     consensus_result = {
         "passes": True,
@@ -324,7 +324,7 @@ def test_build_consensus_reason_single_judge():
 
 def test_build_consensus_reason_multi_judge_agreement():
     """Test that multi-judge agreement returns one labeled reason."""
-    from rubric_kit.llm_judge import _build_consensus_reason
+    from rubric_kit.core.llm_judge import _build_consensus_reason
 
     consensus_result = {
         "passes": True,
@@ -357,7 +357,7 @@ def test_build_consensus_reason_multi_judge_agreement():
 
 def test_build_consensus_reason_partial_agreement():
     """Test that only agreeing judges' reasons are considered."""
-    from rubric_kit.llm_judge import _build_consensus_reason
+    from rubric_kit.core.llm_judge import _build_consensus_reason
 
     consensus_result = {
         "passes": True,  # Final decision is PASS
@@ -386,7 +386,7 @@ def test_build_consensus_reason_partial_agreement():
 
 def test_build_consensus_reason_score_agreement():
     """Test reason building for score-based criteria."""
-    from rubric_kit.llm_judge import _build_consensus_reason
+    from rubric_kit.core.llm_judge import _build_consensus_reason
 
     consensus_result = {
         "score": 3,  # Final score
@@ -420,7 +420,7 @@ def test_build_consensus_reason_score_agreement():
 
 def test_extract_tool_breakdown_single_judge():
     """Test that single judge's tool breakdown is returned."""
-    from rubric_kit.llm_judge import _extract_tool_breakdown
+    from rubric_kit.core.llm_judge import _extract_tool_breakdown
 
     judge_votes = [
         {
@@ -441,7 +441,7 @@ def test_extract_tool_breakdown_single_judge():
 
 def test_extract_tool_breakdown_from_agreeing_judge():
     """Test that tool breakdown is extracted from a judge that agrees with consensus."""
-    from rubric_kit.llm_judge import _extract_tool_breakdown
+    from rubric_kit.core.llm_judge import _extract_tool_breakdown
 
     # Scenario: First judge says PASS (wrong breakdown), second says FAIL (correct)
     # Consensus is FAIL - we should get the breakdown from the FAIL judge
@@ -480,7 +480,7 @@ def test_extract_tool_breakdown_from_agreeing_judge():
 
 def test_extract_tool_breakdown_from_agreeing_judge_pass():
     """Test that tool breakdown is extracted from agreeing judge when consensus is PASS."""
-    from rubric_kit.llm_judge import _extract_tool_breakdown
+    from rubric_kit.core.llm_judge import _extract_tool_breakdown
 
     # Scenario: First judge says FAIL (wrong), second says PASS (correct)
     # Consensus is PASS - we should get the breakdown from the PASS judge
@@ -510,7 +510,7 @@ def test_extract_tool_breakdown_from_agreeing_judge_pass():
 
 def test_extract_tool_breakdown_no_breakdown_present():
     """Test that None is returned when no tool breakdown is present."""
-    from rubric_kit.llm_judge import _extract_tool_breakdown
+    from rubric_kit.core.llm_judge import _extract_tool_breakdown
 
     judge_votes = [
         {"judge": "primary", "passes": True, "reason": "OK"},
@@ -525,7 +525,7 @@ def test_extract_tool_breakdown_no_breakdown_present():
 
 def test_extract_tool_breakdown_fallback_when_no_agreeing_has_breakdown():
     """Test fallback to first available breakdown when no agreeing judge has one."""
-    from rubric_kit.llm_judge import _extract_tool_breakdown
+    from rubric_kit.core.llm_judge import _extract_tool_breakdown
 
     # Only the disagreeing judge has a breakdown
     judge_votes = [
@@ -557,7 +557,7 @@ def test_extract_tool_breakdown_fallback_when_no_agreeing_has_breakdown():
 
 def test_judge_with_custom_temperature(simple_rubric, sample_chat_session_file):
     """Test that judge-specific temperature is used when provided."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -596,7 +596,7 @@ def test_judge_with_custom_temperature(simple_rubric, sample_chat_session_file):
 
 def test_judge_with_default_temperature(simple_rubric, sample_chat_session_file):
     """Test that default temperature is used when judge-specific temperature is not provided."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
     from rubric_kit.prompts import EVALUATOR_CONFIG
 
     criterion = simple_rubric.criteria[0]
@@ -636,7 +636,7 @@ def test_judge_with_default_temperature(simple_rubric, sample_chat_session_file)
 
 def test_judge_with_custom_max_tokens(simple_rubric, sample_chat_session_file):
     """Test that judge-specific max_tokens is used when provided."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -675,7 +675,7 @@ def test_judge_with_custom_max_tokens(simple_rubric, sample_chat_session_file):
 
 def test_judge_with_multiple_custom_parameters(simple_rubric, sample_chat_session_file):
     """Test that multiple judge-specific parameters can be set together."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -722,7 +722,7 @@ def test_judge_with_multiple_custom_parameters(simple_rubric, sample_chat_sessio
 
 def test_judge_panel_with_varied_parameters(simple_rubric, sample_chat_session_file):
     """Test that different judges in a panel can have different parameters."""
-    from rubric_kit.llm_judge import evaluate_criterion_with_panel
+    from rubric_kit.core.llm_judge import evaluate_criterion_with_panel
 
     criterion = simple_rubric.criteria[0]
     dimension = simple_rubric.get_dimension(criterion.dimension)
@@ -786,11 +786,11 @@ def test_judge_panel_with_varied_parameters(simple_rubric, sample_chat_session_f
 def test_parse_chat_session_logs_instead_of_print(sample_chat_session_file):
     """Test that _parse_chat_session_safe uses logging instead of print."""
 
-    from rubric_kit.llm_judge import _parse_chat_session_safe, read_chat_session
+    from rubric_kit.core.llm_judge import _parse_chat_session_safe, read_chat_session
 
     chat_content = read_chat_session(sample_chat_session_file)
 
-    with patch("rubric_kit.llm_judge.logger") as mock_logger:
+    with patch("rubric_kit.core.llm_judge.logger") as mock_logger:
         _parse_chat_session_safe(chat_content, use_parser=True)
 
     # Should have called logger.info or logger.debug, not print
@@ -802,8 +802,8 @@ def test_parse_chat_session_logs_instead_of_print(sample_chat_session_file):
 def test_tool_evaluation_warning_uses_logging():
     """Test that tool evaluation warnings use logging instead of print."""
 
-    from rubric_kit.llm_judge import _evaluate_tool_calls_hybrid
-    from rubric_kit.schema import ToolCalls
+    from rubric_kit.core.llm_judge import _evaluate_tool_calls_hybrid
+    from rubric_kit.models.schema import ToolCalls
 
     criterion = Criterion(
         name="test_tool",
@@ -816,11 +816,11 @@ def test_tool_evaluation_warning_uses_logging():
     judge_config = JudgeConfig(name="test", model="gpt-4")
 
     with (
-        patch("rubric_kit.llm_judge.evaluate_tool_calls_programmatic") as mock_prog,
-        patch("rubric_kit.llm_judge.build_param_validation_prompt", return_value=None),
-        patch("rubric_kit.llm_judge.build_summary_prompt", return_value="summary"),
-        patch("rubric_kit.llm_judge._call_llm", side_effect=Exception("LLM error")),
-        patch("rubric_kit.llm_judge.logger") as mock_logger,
+        patch("rubric_kit.core.llm_judge.evaluate_tool_calls_programmatic") as mock_prog,
+        patch("rubric_kit.core.llm_judge.build_param_validation_prompt", return_value=None),
+        patch("rubric_kit.core.llm_judge.build_summary_prompt", return_value="summary"),
+        patch("rubric_kit.core.llm_judge._call_llm", side_effect=Exception("LLM error")),
+        patch("rubric_kit.core.llm_judge.logger") as mock_logger,
     ):
         mock_breakdown = MagicMock()
         mock_breakdown.overall_pass = True

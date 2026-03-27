@@ -1,6 +1,6 @@
 """Tests for chat session parser."""
 
-from rubric_kit.parser import (
+from rubric_kit.io.parser import (
     AssistantResponse,
     ChatFormat,
     ChatSession,

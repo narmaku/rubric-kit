@@ -1,12 +1,14 @@
 """Judge execution strategies: sequential, parallel, and batched."""
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
-from rubric_kit.schema import Criterion, Dimension, JudgeConfig
+from rubric_kit.models.schema import Criterion, Dimension, JudgeConfig
 
 
 if TYPE_CHECKING:
@@ -23,7 +25,7 @@ def execute_judges(
     parsed_session: Any | None = None,
     batch_size: int = 2,
     timeout: int = 30,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> list[dict[str, Any]]:
     """
     Execute judges using specified execution strategy.
@@ -112,7 +114,7 @@ def _execute_sequential(
     dimension: Dimension | None,
     parsed_session: Any | None,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> list[dict[str, Any]]:
     """Execute judges one by one in sequence."""
     results = []
@@ -141,7 +143,7 @@ def _execute_parallel(
     dimension: Dimension | None,
     parsed_session: Any | None,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> list[dict[str, Any]]:
     """Execute all judges in parallel using asyncio."""
     return asyncio.run(
@@ -166,7 +168,7 @@ async def _execute_parallel_async(
     dimension: Dimension | None,
     parsed_session: Any | None,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> list[dict[str, Any]]:
     """Async helper for parallel execution."""
     loop = asyncio.get_event_loop()
@@ -203,7 +205,7 @@ def _execute_batched(
     parsed_session: Any | None,
     batch_size: int,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> list[dict[str, Any]]:
     """Execute judges in batches."""
     results = []
@@ -235,7 +237,7 @@ def _call_judge_with_timeout(
     dimension: Dimension | None,
     parsed_session: Any | None,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """Call judge function with timeout using ThreadPoolExecutor."""
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -257,7 +259,7 @@ def _call_judge_safe(
     dimension: Dimension | None,
     parsed_session: Any | None,
     timeout: int,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """Safely call judge function, catching all errors and returning standardized result."""
     try:

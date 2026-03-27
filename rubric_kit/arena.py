@@ -8,12 +8,16 @@ from typing import Any
 
 import yaml
 
-from rubric_kit import converters
-from rubric_kit.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
-from rubric_kit.output import print_evaluation_config
-from rubric_kit.pdf_export import export_arena_pdf
-from rubric_kit.processor import calculate_percentage_score, calculate_total_score, evaluate_rubric
-from rubric_kit.schema import (
+from rubric_kit.core.llm_judge import evaluate_rubric_with_panel, evaluate_rubric_with_panel_from_qa
+from rubric_kit.core.processor import (
+    calculate_percentage_score,
+    calculate_total_score,
+    evaluate_rubric,
+)
+from rubric_kit.io.output import print_evaluation_config
+from rubric_kit.io.validator import load_judge_panel_config, load_rubric, substitute_variables
+from rubric_kit.models import converters
+from rubric_kit.models.schema import (
     ArenaContestant,
     ArenaSpec,
     Criterion,
@@ -23,7 +27,7 @@ from rubric_kit.schema import (
     ToolCalls,
     ToolSpec,
 )
-from rubric_kit.validator import load_judge_panel_config, load_rubric, substitute_variables
+from rubric_kit.reports.pdf_arena import export_arena_pdf
 
 
 logger = logging.getLogger(__name__)

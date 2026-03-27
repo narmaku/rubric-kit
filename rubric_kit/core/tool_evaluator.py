@@ -18,8 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
-from rubric_kit.parser import ChatSession, ToolCall
-from rubric_kit.schema import Criterion, ToolSpec
+from rubric_kit.io.parser import ChatSession, ToolCall
+from rubric_kit.models.schema import Criterion, ToolSpec
 
 
 class ToolType(Enum):

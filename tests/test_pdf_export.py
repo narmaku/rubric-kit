@@ -117,7 +117,7 @@ def test_export_evaluation_pdf_from_yaml(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF from YAML file."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with new structure
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -155,7 +155,7 @@ def test_export_evaluation_pdf_from_json(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF from JSON file."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary JSON file with new structure
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -191,7 +191,7 @@ def test_export_evaluation_pdf_from_json(
 
 def test_export_evaluation_pdf_minimal(sample_results):
     """Test exporting PDF with minimal data (just results)."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with minimal data
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -217,7 +217,7 @@ def test_export_evaluation_pdf_minimal(sample_results):
 
 def test_export_evaluation_pdf_invalid_input():
     """Test exporting PDF with invalid input file."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         pdf_path = f.name
@@ -234,7 +234,7 @@ def test_export_evaluation_pdf_with_custom_title(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF uses custom report_title from metadata."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with custom title
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -269,7 +269,7 @@ def test_export_evaluation_pdf_with_rubric_appendix(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF includes rubric appendix with dimensions and criteria."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with rubric data at top level
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -304,7 +304,7 @@ def test_export_evaluation_pdf_with_judges_panel_summary(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF includes LLM judges panel summary."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with judge_panel at top level
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -339,7 +339,7 @@ def test_export_evaluation_pdf_includes_chat_session(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF always includes chat session content."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     chat_content = (
         "User: What is the capital of France?\nAssistant: The capital of France is Paris."
@@ -383,7 +383,7 @@ def test_export_evaluation_pdf_includes_qna(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF always includes Q&A content."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file with Q&A input (new structured format)
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -425,7 +425,7 @@ def test_export_evaluation_pdf_without_input_content(
     sample_results, sample_metadata, sample_rubric, sample_judge_panel
 ):
     """Test exporting PDF gracefully handles missing input content."""
-    from rubric_kit.pdf_export import export_evaluation_pdf
+    from rubric_kit.reports.pdf_evaluation import export_evaluation_pdf
 
     # Create temporary YAML file without input content
     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:

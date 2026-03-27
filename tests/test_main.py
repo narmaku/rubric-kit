@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 import yaml
 
-from rubric_kit.schema import Criterion, Dimension, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, Rubric
 
 
 @pytest.fixture
@@ -209,7 +209,7 @@ class TestEvaluateCommand:
         self, mock_eval_llm, sample_rubric_file, sample_chat_session_file, capsys
     ):
         """Test the evaluate subcommand with LLM judge - always outputs YAML."""
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         # Mock LLM evaluations
         mock_eval_llm.return_value = {
@@ -261,7 +261,7 @@ class TestEvaluateCommand:
                 os.unlink(output_path)
 
     @patch("rubric_kit.api.evaluate_rubric_with_panel")
-    @patch("rubric_kit.main.export_evaluation_pdf")
+    @patch("rubric_kit.cli.commands.export_evaluation_pdf")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_evaluate_with_report(
         self, mock_pdf, mock_eval_llm, sample_rubric_file, sample_chat_session_file
@@ -269,7 +269,7 @@ class TestEvaluateCommand:
         """Test evaluate subcommand with --report flag generates PDF."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -314,7 +314,7 @@ class TestEvaluateCommand:
         """Test evaluate subcommand with --report-title stores title in metadata."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -358,7 +358,7 @@ class TestEvaluateCommand:
         """Test evaluate subcommand produces self-contained output with rubric and judge_panel at top level."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -420,7 +420,7 @@ class TestEvaluateCommand:
         """Test that evaluate subcommand always includes input content in output."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -467,7 +467,7 @@ class TestEvaluateCommand:
         """Test evaluate subcommand without API key."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         # Ensure no API key in environment
         with patch.dict(os.environ, {}, clear=True):
@@ -491,7 +491,7 @@ class TestEvaluateCommand:
         """Test evaluate subcommand with missing file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"}):
             sys.argv = [
@@ -514,13 +514,13 @@ class TestEvaluateCommand:
 class TestGenerateCommand:
     """Test the 'generate' subcommand."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_command(self, mock_generator_class, sample_qa_file):
         """Test the generate subcommand."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         # Mock the generator
         mock_generator = Mock()
@@ -574,13 +574,13 @@ class TestGenerateCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_with_parameters(self, mock_generator_class, sample_qa_file):
         """Test generate command with custom parameters."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -633,7 +633,7 @@ class TestGenerateCommand:
         """Test generate subcommand without API key."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with patch.dict(os.environ, {}, clear=True):
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -682,13 +682,13 @@ dimensions:
 class TestGenerateMetadata:
     """Test generate command metadata and metrics output."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_includes_metadata(self, mock_generator_class, sample_qa_file):
         """Test that generate command includes metadata in output YAML."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -736,13 +736,13 @@ class TestGenerateMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_includes_metrics_by_default(self, mock_generator_class, sample_qa_file):
         """Test that generate command includes metrics by default."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -785,7 +785,7 @@ class TestGenerateMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_no_metrics_excludes_metrics_but_keeps_metadata(
         self, mock_generator_class, sample_qa_file
@@ -793,7 +793,7 @@ class TestGenerateMetadata:
         """Test that --no-metrics excludes metrics but keeps other metadata."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -842,7 +842,7 @@ class TestGenerateMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_from_chat_includes_metadata(
         self, mock_generator_class, sample_chat_session_file
@@ -850,7 +850,7 @@ class TestGenerateMetadata:
         """Test that generate from chat includes metadata with correct source_type."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -891,13 +891,13 @@ class TestGenerateMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_metadata_includes_options(self, mock_generator_class, sample_qa_file):
         """Test that generate metadata includes generation options."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -948,13 +948,13 @@ class TestGenerateMetadata:
 class TestRefineMetadata:
     """Test refine command metadata and metrics output."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_includes_metadata(self, mock_generator_class, sample_rubric_file):
         """Test that refine command includes metadata in output YAML."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1000,13 +1000,13 @@ class TestRefineMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_includes_metrics_by_default(self, mock_generator_class, sample_rubric_file):
         """Test that refine command includes metrics by default."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1049,7 +1049,7 @@ class TestRefineMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_no_metrics_excludes_metrics_but_keeps_metadata(
         self, mock_generator_class, sample_rubric_file
@@ -1057,7 +1057,7 @@ class TestRefineMetadata:
         """Test that --no-metrics excludes metrics but keeps other metadata."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1106,7 +1106,7 @@ class TestRefineMetadata:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_with_qa_context_includes_context_in_metadata(
         self, mock_generator_class, sample_rubric_file, sample_qa_file
@@ -1114,7 +1114,7 @@ class TestRefineMetadata:
         """Test that refine with Q&A context includes context info in metadata."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1163,13 +1163,13 @@ class TestRefineMetadata:
 class TestGenerateWithGuidelines:
     """Test generate command with --guidelines option."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_with_guidelines(self, mock_generator_class, sample_qa_file):
         """Test generate command passes guidelines to generator."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1222,7 +1222,7 @@ class TestGenerateWithGuidelines:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_from_chat_with_guidelines(
         self, mock_generator_class, sample_chat_session_file
@@ -1230,7 +1230,7 @@ class TestGenerateWithGuidelines:
         """Test generate from chat command passes guidelines to generator."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1279,13 +1279,13 @@ class TestGenerateWithGuidelines:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_with_guidelines_file(self, mock_generator_class, sample_qa_file):
         """Test generate command reads guidelines from file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1346,7 +1346,7 @@ Focus on evaluating these specific behaviors."""
         """Test that --guidelines and --guidelines-file cannot be used together."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("Some guidelines")
@@ -1379,7 +1379,7 @@ Focus on evaluating these specific behaviors."""
 class TestGenerateWithDimensionsFile:
     """Test generate command with --dimensions-file."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_with_dimensions_file(
         self, mock_generator_class, sample_qa_file, sample_dimensions_file
@@ -1387,7 +1387,7 @@ class TestGenerateWithDimensionsFile:
         """Test generate command uses provided dimensions file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1443,7 +1443,7 @@ class TestGenerateWithDimensionsFile:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_generate_from_chat_with_dimensions_file(
         self, mock_generator_class, sample_chat_session_file, sample_dimensions_file
@@ -1451,7 +1451,7 @@ class TestGenerateWithDimensionsFile:
         """Test generate from chat uses provided dimensions file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1504,7 +1504,7 @@ class TestGenerateWithDimensionsFile:
 class TestRefineWithDimensionsFile:
     """Test refine command with --dimensions-file."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_with_dimensions_file(
         self, mock_generator_class, sample_rubric_file, sample_dimensions_file
@@ -1512,7 +1512,7 @@ class TestRefineWithDimensionsFile:
         """Test refine command merges provided dimensions."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1566,13 +1566,13 @@ class TestRefineWithDimensionsFile:
 class TestRefineCommand:
     """Test the 'refine' subcommand."""
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_command(self, mock_generator_class, sample_rubric_file):
         """Test the refine subcommand."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1608,13 +1608,13 @@ class TestRefineCommand:
         # Verify refine_rubric was called
         assert mock_generator.refine_rubric.called
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_with_feedback(self, mock_generator_class, sample_rubric_file):
         """Test refine command with feedback."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1647,13 +1647,13 @@ class TestRefineCommand:
         call_args = mock_generator.refine_rubric.call_args
         assert call_args[1]["feedback"] == feedback
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_with_feedback_file(self, mock_generator_class, sample_rubric_file):
         """Test refine command reads feedback from file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1709,7 +1709,7 @@ Please refine the rubric to:
         """Test that --feedback and --feedback-file cannot be used together."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("Some feedback")
@@ -1736,13 +1736,13 @@ Please refine the rubric to:
             if os.path.exists(feedback_file):
                 os.unlink(feedback_file)
 
-    @patch("rubric_kit.main.RubricGenerator")
+    @patch("rubric_kit.cli.commands.RubricGenerator")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_refine_with_output(self, mock_generator_class, sample_rubric_file):
         """Test refine command with custom output path."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_generator = Mock()
         mock_generator_class.return_value = mock_generator
@@ -1782,13 +1782,13 @@ Please refine the rubric to:
 class TestRerunCommand:
     """Test the 'rerun' subcommand."""
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_rerun_with_embedded_input(self, mock_eval_llm, sample_evaluation_yaml):
         """Test rerun subcommand uses settings from self-contained YAML."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         # The sample_evaluation_yaml fixture already has embedded chat_session content
 
@@ -1817,7 +1817,7 @@ class TestRerunCommand:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_rerun_with_new_input(
         self, mock_eval_llm, sample_evaluation_yaml, sample_chat_session_file
@@ -1825,7 +1825,7 @@ class TestRerunCommand:
         """Test rerun with new input file overrides embedded/original input."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {"fact_1": {"type": "binary", "passes": True}}
 
@@ -1855,7 +1855,7 @@ class TestRerunCommand:
         """Test rerun subcommand with missing input file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"}):
             sys.argv = ["rubric-kit", "rerun", "nonexistent.yaml", "--output-file", "output.yaml"]
@@ -1868,13 +1868,13 @@ class TestRerunCommand:
 class TestRerunMetricsPropagation:
     """Test that metrics are properly propagated through the rerun path."""
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_rerun_passes_metrics_to_evaluation(self, mock_eval_llm, sample_evaluation_yaml):
         """Test that rerun creates a MetricsAggregator and passes it to _run_evaluation."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {"fact_1": {"type": "binary", "passes": True}}
 
@@ -1903,13 +1903,13 @@ class TestRerunMetricsPropagation:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_rerun_includes_metrics_in_output(self, mock_eval_llm, sample_evaluation_yaml):
         """Test that rerun output includes metrics section when tracking is enabled."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {"fact_1": {"type": "binary", "passes": True}}
 
@@ -1945,7 +1945,7 @@ class TestExportCommand:
         """Test export subcommand with --format pdf."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pdf", delete=False) as f:
             pdf_path = f.name
@@ -1975,7 +1975,7 @@ class TestExportCommand:
         import csv
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             csv_path = f.name
@@ -2014,7 +2014,7 @@ class TestExportCommand:
         """Test export subcommand with --format json."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json_path = f.name
@@ -2048,7 +2048,7 @@ class TestExportCommand:
         """Test export subcommand with missing input file."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         sys.argv = [
             "rubric-kit",
@@ -2068,7 +2068,7 @@ class TestExportCommand:
         """Test export subcommand requires --format argument."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         sys.argv = ["rubric-kit", "export", sample_evaluation_yaml, "--output", "output.pdf"]
 
@@ -2082,7 +2082,7 @@ class TestExportCommand:
         """Test export to PDF always includes input content section."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".pdf", delete=False) as f:
             pdf_path = f.name
@@ -2111,7 +2111,7 @@ class TestExportCommand:
         """Test export to JSON always includes full input content."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json_path = f.name
@@ -2146,7 +2146,7 @@ class TestExportCommand:
         """Test export to CSV includes header comments with metadata and input summary."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
             csv_path = f.name
@@ -2185,7 +2185,7 @@ def test_cli_help():
     """Test CLI help message."""
     import sys
 
-    from rubric_kit.main import main
+    from rubric_kit.cli.commands import main
 
     sys.argv = ["rubric-kit", "--help"]
 
@@ -2200,7 +2200,7 @@ def test_cli_no_subcommand():
     """Test CLI without subcommand shows help."""
     import sys
 
-    from rubric_kit.main import main
+    from rubric_kit.cli.commands import main
 
     sys.argv = ["rubric-kit"]
 
@@ -2277,7 +2277,7 @@ judge_panel:
         """Test that arena subcommand requires --arena-spec argument."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         sys.argv = ["rubric-kit", "arena"]
 
@@ -2291,7 +2291,7 @@ judge_panel:
         """Test that arena subcommand correctly parses --arena-spec argument."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         # Just test that the parser works, not the full command
 
@@ -2325,13 +2325,13 @@ judge_panel:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_arena_command_runs_multiple_evaluations(self, mock_eval_llm, sample_arena_spec_file):
         """Test that arena command evaluates all contestants."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -2364,13 +2364,13 @@ judge_panel:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_arena_output_structure(self, mock_eval_llm, sample_arena_spec_file):
         """Test that arena output has correct structure with all contestants."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},
@@ -2421,14 +2421,14 @@ judge_panel:
             if os.path.exists(output_path):
                 os.unlink(output_path)
 
-    @patch("rubric_kit.main.evaluate_rubric_with_panel")
-    @patch("rubric_kit.main.export_arena_pdf")
+    @patch("rubric_kit.cli.commands.evaluate_rubric_with_panel")
+    @patch("rubric_kit.cli.commands.export_arena_pdf")
     @patch.dict(os.environ, {"OPENAI_API_KEY": "test_key"})
     def test_arena_with_report(self, mock_pdf, mock_eval_llm, sample_arena_spec_file):
         """Test arena subcommand with --report flag generates PDF."""
         import sys
 
-        from rubric_kit.main import main
+        from rubric_kit.cli.commands import main
 
         mock_eval_llm.return_value = {
             "fact_1": {"type": "binary", "passes": True},

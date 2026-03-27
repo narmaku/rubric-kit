@@ -6,7 +6,7 @@ import tempfile
 import pytest
 import yaml
 
-from rubric_kit.schema import (
+from rubric_kit.models.schema import (
     ConsensusConfig,
     Criterion,
     Dimension,
@@ -436,7 +436,7 @@ class TestResolveRubric:
     def test_file_not_found(self):
         """Pass invalid path, get RubricValidationError."""
         from rubric_kit.api import _resolve_rubric
-        from rubric_kit.validator import RubricValidationError
+        from rubric_kit.io.validator import RubricValidationError
 
         with pytest.raises(RubricValidationError, match="not found"):
             _resolve_rubric("/nonexistent/rubric.yaml")

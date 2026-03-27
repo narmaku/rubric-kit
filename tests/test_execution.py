@@ -36,8 +36,8 @@ def mock_judge_function(
 
 def test_execute_judges_sequential():
     """Test sequential execution of judges."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_pass_1", model="gpt-4"),
@@ -66,8 +66,8 @@ def test_execute_judges_sequential_with_timeout():
     """Test sequential execution respects timeout."""
     import time
 
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     def slow_judge_function(
         judge_config, criterion, chat_content, dimension=None, parsed_session=None, metrics=None
@@ -94,8 +94,8 @@ def test_execute_judges_sequential_with_timeout():
 
 def test_execute_judges_sequential_single_judge():
     """Test sequential execution with single judge."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [JudgeConfig(name="judge_pass_1", model="gpt-4")]
 
@@ -119,8 +119,8 @@ def test_execute_judges_sequential_single_judge():
 
 def test_execute_judges_parallel():
     """Test parallel execution of judges."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_pass_1", model="gpt-4"),
@@ -146,8 +146,8 @@ def test_execute_judges_parallel():
 
 def test_execute_judges_parallel_maintains_order():
     """Test that parallel execution maintains judge order in results."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_1", model="gpt-4"),
@@ -176,8 +176,8 @@ def test_execute_judges_parallel_maintains_order():
 
 def test_execute_judges_batched():
     """Test batched execution of judges."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_pass_1", model="gpt-4"),
@@ -205,8 +205,8 @@ def test_execute_judges_batched():
 
 def test_execute_judges_batched_uneven_batches():
     """Test batched execution with uneven batch sizes."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     # 5 judges with batch_size=2 => 3 batches (2, 2, 1)
     judges = [
@@ -233,8 +233,8 @@ def test_execute_judges_batched_uneven_batches():
 
 def test_execute_judges_batched_single_batch():
     """Test batched execution where batch_size >= num judges."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_1", model="gpt-4"),
@@ -260,8 +260,8 @@ def test_execute_judges_batched_single_batch():
 
 def test_execute_judges_with_failing_judge():
     """Test execution continues when one judge fails."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     def failing_judge_function(
         judge_config, criterion, chat_content, dimension=None, parsed_session=None, metrics=None
@@ -300,8 +300,8 @@ def test_execute_judges_with_failing_judge():
 
 def test_execute_judges_invalid_mode():
     """Test that invalid execution mode raises error."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [JudgeConfig(name="judge_1", model="gpt-4")]
 
@@ -317,7 +317,7 @@ def test_execute_judges_invalid_mode():
 
 def test_execute_judges_empty_judges_list():
     """Test that empty judges list raises error."""
-    from rubric_kit.execution import execute_judges
+    from rubric_kit.core.execution import execute_judges
 
     with pytest.raises(ValueError, match="No judges provided"):
         execute_judges(
@@ -338,8 +338,8 @@ def test_parallel_uses_explicit_thread_pool():
     """Test that parallel execution creates ThreadPoolExecutor with max_workers=len(judges)."""
     from unittest.mock import patch
 
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="judge_1", model="gpt-4"),
@@ -349,7 +349,9 @@ def test_parallel_uses_explicit_thread_pool():
 
     from concurrent.futures import ThreadPoolExecutor
 
-    with patch("rubric_kit.execution.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as mock_pool:
+    with patch(
+        "rubric_kit.core.execution.ThreadPoolExecutor", wraps=ThreadPoolExecutor
+    ) as mock_pool:
         results = execute_judges(
             judges=judges,
             judge_function=mock_judge_function,
@@ -378,8 +380,8 @@ def test_parallel_uses_explicit_thread_pool():
 
 def test_execute_judges_with_scores():
     """Test execution with score-based criteria."""
-    from rubric_kit.execution import execute_judges
-    from rubric_kit.schema import JudgeConfig
+    from rubric_kit.core.execution import execute_judges
+    from rubric_kit.models.schema import JudgeConfig
 
     judges = [
         JudgeConfig(name="score_1", model="gpt-4"),

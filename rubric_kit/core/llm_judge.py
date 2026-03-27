@@ -1,23 +1,24 @@
 """LLM-based judge panel for automatic criterion evaluation."""
 
+from __future__ import annotations
+
 import json
 import logging
 import random
 import re
 import time
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 import litellm
 
-from rubric_kit.schema import Criterion, Dimension, JudgeConfig, JudgePanelConfig, Rubric
+from rubric_kit.models.schema import Criterion, Dimension, JudgeConfig, JudgePanelConfig, Rubric
 
 
 if TYPE_CHECKING:
     from rubric_kit.metrics import MetricsAggregator
-from rubric_kit.consensus import apply_binary_consensus, apply_score_consensus
-from rubric_kit.execution import execute_judges
+
 from rubric_kit.generator import parse_qa_input
-from rubric_kit.parser import ChatSession, parse_chat_session
+from rubric_kit.io.parser import ChatSession, parse_chat_session
 from rubric_kit.prompts import (
     EVALUATOR_CONFIG,
     TOOL_CALL_EVALUATOR_CONFIG,
@@ -25,7 +26,10 @@ from rubric_kit.prompts import (
     build_score_criterion_prompt,
     build_tool_call_evaluation_prompt,
 )
-from rubric_kit.tool_evaluator import (
+
+from .consensus import apply_binary_consensus, apply_score_consensus
+from .execution import execute_judges
+from .tool_evaluator import (
     ToolBreakdown,
     apply_param_validation_results,
     breakdown_to_dict,
@@ -159,7 +163,7 @@ def _evaluate_tool_calls_hybrid(
     criterion: Criterion,
     parsed_session: ChatSession | None,
     judge_config: JudgeConfig,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> tuple[ToolBreakdown, bool, float]:
     """
     Evaluate tool calls using hybrid approach: programmatic + LLM.
@@ -227,7 +231,7 @@ def _evaluate_tool_criterion_with_breakdown(
     chat_content: str,
     dimension: Dimension | None,
     parsed_session: ChatSession | None,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate a tool call criterion using hybrid approach.
@@ -279,7 +283,7 @@ def _call_llm(
     judge_config: JudgeConfig,
     prompt: str,
     config: Any,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
     call_type: str = "evaluate_criterion",
     context_id: str | None = None,
 ) -> str:
@@ -396,7 +400,7 @@ def _single_judge_evaluate(
     chat_content: str,
     dimension: Dimension | None,
     parsed_session: ChatSession | None = None,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate a criterion using a single judge.
@@ -529,7 +533,7 @@ def evaluate_criterion_with_panel(
     dimension: Dimension | None,
     panel_config: JudgePanelConfig,
     parsed_session: ChatSession | None = None,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """
     Evaluate a single criterion using a judge panel.
@@ -545,9 +549,9 @@ def evaluate_criterion_with_panel(
     Returns:
         Evaluation result dictionary with consensus information:
         For binary: {"type": "binary", "passes": bool, "consensus_reached": bool,
-                    "consensus_count": int, "judge_votes": List[Dict], "reason": str}
+                    "consensus_count": int, "judge_votes": list[dict], "reason": str}
         For score: {"type": "score", "score": int, "consensus_reached": bool,
-                   "consensus_count": int, "judge_votes": List[Dict], "reason": str}
+                   "consensus_count": int, "judge_votes": list[dict], "reason": str}
     """
     judge_results = execute_judges(
         judges=panel_config.judges,
@@ -655,7 +659,7 @@ def _evaluate_criterion_safe(
     chat_content: str,
     panel_config: JudgePanelConfig,
     parsed_session: ChatSession | None,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, Any]:
     """Evaluate a single criterion, validating dimension exists."""
     dimension = rubric.get_dimension(criterion.dimension)
@@ -679,7 +683,7 @@ def evaluate_rubric_with_panel(
     chat_session_file: str,
     panel_config: JudgePanelConfig,
     use_parser: bool = True,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     Evaluate all criteria in a rubric using a judge panel.
@@ -720,7 +724,7 @@ def evaluate_rubric_with_panel_from_qa(
     rubric: Rubric,
     qna_file: str,
     panel_config: JudgePanelConfig,
-    metrics: Optional["MetricsAggregator"] = None,
+    metrics: MetricsAggregator | None = None,
 ) -> dict[str, dict[str, Any]]:
     """
     Evaluate all criteria in a rubric using a judge panel, from a Q&A YAML file.

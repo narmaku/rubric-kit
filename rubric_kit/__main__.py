@@ -2,7 +2,7 @@
 
 import sys
 
-from rubric_kit.main import main
+from rubric_kit.cli.commands import main
 
 
 sys.exit(main())
